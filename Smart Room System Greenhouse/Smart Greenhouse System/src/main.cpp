@@ -431,11 +431,11 @@ void connectToWiFi() {
 // Fungsi untuk koneksi ke broker MQTT
 void connectToMQTT() {
   if (isWiFiConnected) {
-    mqttClient.begin(mqtt_server, net);
+    mqttClient.begin(mqtt_server,1883, net);  // Atur port untuk koneksi MQTT
     mqttClient.onMessage(messageReceived);
     
     if (debugMode) Serial.println("Attempting to connect to MQTT broker...");
-    while (!mqttClient.connect("arduino", "username", "password")) {
+    while (!mqttClient.connect("SRGH_1", "UNINUSUNGGUL", "UNINUSUNGGUL123")) {
       delay(500);
       if (debugMode) Serial.print(".");
     }
