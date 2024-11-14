@@ -22,8 +22,8 @@
 #define RELAY_CHANNEL 0                // Channel relay pada shift register (CH1)
 
 // Detail Koneksi WiFi dan MQTT
-const char* ssid = "your_SSID";        // Nama jaringan WiFi
-const char* password = "your_PASSWORD"; // Password jaringan WiFi
+const char* ssid = "R. MEETING/KELAS UNINUS (G102)";        // Nama jaringan WiFi
+const char* password = "uninusunggul2025"; // Password jaringan WiFi
 const char* mqtt_server = "your_MQTT_SERVER"; // Server MQTT
 
 // Inisialisasi objek sensor
