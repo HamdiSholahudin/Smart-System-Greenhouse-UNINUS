@@ -11,8 +11,8 @@
 #include "ShiftRegister74HC595_NonTemplate.h"
 
 // === Konfigurasi WiFi dan MQTT ===
-const char * ssid = "R. MEETING/KELAS UNINUS (G102)";
-const char * password = "uninusunggul2025";
+const char * ssid = "SMART GREENHOUSE UNINUS (2Ghz)";
+const char * password = "UNINUSLAB530";
 const char * broker = "88.222.214.56";
 const int port = 1883;
 const char * mqttSensorTopic = "SmartHydroponik/SensorData";
@@ -34,16 +34,7 @@ PubSubClient mqttClient(wifiClient);
 #define RELAY_ZAT_A 1
 #define RELAY_ZAT_B 0
 #define RELAY_SPRAYING 4
-#define SENSOR 27
 #define DS18B20PIN 9
-#define FLOW_SENSOR_PIN 27
-
-// Variabel untuk menghitung laju aliran
-volatile unsigned int flowFrequency = 0;
-float flowRate = 0.0;
-float flowRateMps = 0.0;
-unsigned long totalMilliLiter = 0;
-unsigned long lastFlowCalculationTime = 0;
 
 bool pumpPhUpState = false, pumpPhDownState = false, pumpZatAState = false, pumpZatBState = false, pumpSprayingState = false;
 bool lastButtonS1State = HIGH, lastButtonS2State = HIGH, lastButtonS3State = HIGH, lastButtonS4State = HIGH;
@@ -65,6 +56,18 @@ HardwareSerial Ultrasonic_Sensor(2);
 #define TdsSensorPin 11
 #define phSensorPin 13
 
+byte sensorInt = 12; 
+byte flowsensor = 0;
+
+float konstanta = 4.5; //konstanta flow meter
+
+volatile byte pulseCount;
+
+float debit;
+unsigned int flowmlt;
+unsigned long totalmlt;
+unsigned long oldTime;
+
 // Variabel Global
 float phSensorValue = 0.0, tdsValue = 0.0, temperatureDS18B20 = 0.0;
 float temperatureDHT = 0.0, humidityDHT = 0.0, waterflowdata = 0.0;
@@ -79,6 +82,7 @@ float currentNutrisiValue= 0;
 
 String mode = "Manual"; 
 
+unsigned char CS;
 unsigned char data_buffer[4] = {
   0
 };
@@ -93,31 +97,10 @@ SemaphoreHandle_t xMutex;
 std::shared_ptr < ShiftRegister74HC595_NonTemplate > HT74HC595 =
   std::make_shared < ShiftRegister74HC595_NonTemplate > (6, HT74HC595_DATA, HT74HC595_CLOCK, HT74HC595_LATCH);
 
-void IRAM_ATTR pulseCounter() {
-  flowFrequency++; 
-}
-
-void calculateFlowRate() {
-  flowRate = ((1000.0 / (millis() - lastFlowCalculationTime)) * flowFrequency) / 7.5;
-  lastFlowCalculationTime = millis();
-  flowFrequency = 0;
-
-  flowRateMps = flowRate / 1000.0 / 60.0; // 1 L = 1000 ml, 1 m^3 = 1000 L
-}
-
-void waterflowTask(void * pvParameters) {
-  pinMode(FLOW_SENSOR_PIN, INPUT_PULLUP); // Set pin untuk sensor aliran
-  attachInterrupt(digitalPinToInterrupt(FLOW_SENSOR_PIN), pulseCounter, FALLING); // Interrupt pada pin sensor aliran
-
-  for (;;) {
-    calculateFlowRate();
-    Serial.print("Flow Rate: ");
-    Serial.print(flowRateMps, 4);
-    Serial.println(" m/s");
-
-    vTaskDelay(pdMS_TO_TICKS(1000));
+ void pulseCounter(){
+  // Increment the pulse counter
+    pulseCount++;
   }
-}
 
 void sendPumpStatus(const char * pumpName, bool state,
   const char * type) {
@@ -187,6 +170,7 @@ void mqttTask(void * pvParameters) {
   Serial.println("WiFi Connected!");
 
   mqttClient.setServer(broker, port);
+  mqttClient.setCallback(callback);
   while (!mqttClient.connected()) {
     Serial.println("Connecting to MQTT...");
     if (mqttClient.connect(clientID, mqttUsername, mqttPassword)) {
@@ -208,7 +192,7 @@ void mqttTask(void * pvParameters) {
         jsonDoc["ph_air"] = phSensorValue;
         jsonDoc["tds"] = tdsValue;
         jsonDoc["suhu_air"] = temperatureDS18B20;
-        jsonDoc["laju_air"] = flowRateMps;
+        jsonDoc["laju_air"] = totalmlt;
         jsonDoc["volume_air"] = distance;
         jsonDoc["panel_temp"] = temperatureDHT;
         jsonDoc["device_id"] = 1;
@@ -232,11 +216,14 @@ void mqttTask(void * pvParameters) {
   }
 }
 
-void callback(char * topic, byte * payload, unsigned int length) {
-  payload[length] = '\0'; // Null-terminate the payload string
-  String message = String((char * ) payload);
+void callback(char *topic, byte *payload, unsigned int length) {
+  // Konversi payload byte array menjadi string
+  String message = "";
+  for (unsigned int i = 0; i < length; i++) {
+    message += (char)payload[i];
+  }
 
-  StaticJsonDocument <512> doc;
+  StaticJsonDocument<512> doc;
   DeserializationError error = deserializeJson(doc, message);
 
   if (error) {
@@ -244,11 +231,12 @@ void callback(char * topic, byte * payload, unsigned int length) {
     return;
   }
 
+  // Handle Settings topic
   if (String(topic) == "Smarthydroponik/Settings") {
-    limitPhMin = doc["Limit_ph_min"];
-    limitPhMax = doc["Limit_ph_max"];
-    limitNutrisiMin = doc["Limit_nutrisi_min"];
-    limitNutrisiMax = doc["Limit_nutrisi_max"];
+    float limitPhMin = doc["Limit_ph_min"];
+    float limitPhMax = doc["Limit_ph_max"];
+    float limitNutrisiMin = doc["Limit_nutrisi_min"];
+    float limitNutrisiMax = doc["Limit_nutrisi_max"];
     // tangkiAir = doc["tangki_air"];
 
     Serial.print("Limit PH Min: ");
@@ -263,6 +251,7 @@ void callback(char * topic, byte * payload, unsigned int length) {
     // Serial.println(tangkiAir);
   }
 
+  // Handle Control topic
   if (String(topic) == "SmartHydroponik/Control") {
     String type = doc["type"];
     String pompa = doc["pompa"];
@@ -270,31 +259,31 @@ void callback(char * topic, byte * payload, unsigned int length) {
     String device = doc["device"];
 
     if (type == "control") {
+      // Kontrol Pompa
       if (pompa == "Pompa_PHUP") {
-        pumpPhUpState = (status == 1);
-        HT74HC595 -> set(RELAY_PH_UP, pumpPhUpState ? HIGH : LOW, true);
+        bool pumpPhUpState = (status == 1);
+        HT74HC595->set(RELAY_PH_UP, pumpPhUpState ? HIGH : LOW, true);
         // sendPumpStatus("Pompa_PHUP", pumpPhUpState);
       } else if (pompa == "Pompa_PHDOWN") {
-        pumpPhDownState = (status == 1);
-        HT74HC595 -> set(RELAY_PH_DOWN, pumpPhDownState ? HIGH : LOW, true);
+        bool pumpPhDownState = (status == 1);
+        HT74HC595->set(RELAY_PH_DOWN, pumpPhDownState ? HIGH : LOW, true);
         // sendPumpStatus("Pompa_PHDOWN", pumpPhDownState);
       } else if (pompa == "Pompa_Nutrisi") {
-        pumpZatAState = (status == 1);
-        pumpZatBState = (status == 1);
-        HT74HC595 -> set(RELAY_ZAT_A, pumpZatAState ? HIGH : LOW, true);
-        HT74HC595 -> set(RELAY_ZAT_B, pumpZatBState ? HIGH : LOW, true);
+        bool pumpZatAState = (status == 1);
+        bool pumpZatBState = (status == 1);
+        HT74HC595->set(RELAY_ZAT_A, pumpZatAState ? HIGH : LOW, true);
+        HT74HC595->set(RELAY_ZAT_B, pumpZatBState ? HIGH : LOW, true);
         // sendPumpStatus("Pompa_Nutrisi", pumpZatBState);
       } else if (pompa == "Pompa_Spraying") {
-        pumpSprayingState = (status == 1);
-        HT74HC595 -> set(RELAY_SPRAYING, pumpSprayingState ? HIGH : LOW, true);
+        bool pumpSprayingState = (status == 1);
+        HT74HC595->set(RELAY_SPRAYING, pumpSprayingState ? HIGH : LOW, true);
         // sendPumpStatus("Pompa_Spraying", pumpSprayingState);
       }
     } else if (type == "mode") {
-      mode = doc["mode"].as<String>();
+      String mode = doc["mode"].as<String>();
       Serial.println("Mode set to: " + mode);
     }
   }
-
 }
 
 void controlPumpTask(void * pvParameters) {
@@ -342,11 +331,6 @@ void controlPumpTask(void * pvParameters) {
       lastDebounceTimeS4 = currentTime;
     }
     lastButtonS4State = currentButtonS4State;
-
-    if (mode == "Automatic") {
-    autoPompaPH();
-    autoNutrisi();
-    }
 
     vTaskDelay(pdMS_TO_TICKS(50));
   }
@@ -420,11 +404,11 @@ void ultrasonicTask(void * pvParameters) {
         for (int i = 1; i < 4; i++) {
           data_buffer[i] = Ultrasonic_Sensor.read();
         }
-        unsigned char CS = data_buffer[0] + data_buffer[1] + data_buffer[2];
+        CS = data_buffer[0] + data_buffer[1] + data_buffer[2];
         if (data_buffer[3] == CS) {
-          int dist = (data_buffer[1] << 8) + data_buffer[2] / 10;
+          distance = (data_buffer[1] << 8) + data_buffer[2] / 10.0;
           if (xSemaphoreTake(xMutex, portMAX_DELAY) == pdTRUE) {
-            distance = dist;
+            distance = distance;
             xSemaphoreGive(xMutex);
           }
         }
@@ -473,6 +457,11 @@ void lcdTask(void * pvParameters) {
       lcd.print(temperatureDS18B20, 1);
       lcd.print(" C");
 
+      lcd.setCursor(13, 0);
+      lcd.print("V: ");
+      lcd.print(distance, 1);
+      lcd.print("cm ");
+
       lcd.setCursor(0, 1);
       lcd.print("Panel: ");
       lcd.print(temperatureDHT, 1);
@@ -482,8 +471,8 @@ void lcdTask(void * pvParameters) {
 
       lcd.setCursor(0, 2);
       lcd.print("Flow: ");
-      lcd.print(waterflowdata, 1);
-      lcd.print("l/s ");
+      lcd.print(waterflowdata, 4);
+      lcd.print("mL/s ");
 
       lcd.setCursor(0, 3);
       lcd.print("TDS: ");
@@ -505,6 +494,8 @@ void setup() {
   dht.begin();
   Ultrasonic_Sensor.begin(9600, SERIAL_8N1, RX, TX);
   Wire.begin(16, 17);
+  // lcd.init();
+  // lcd.begin();
   lcd.begin(20, 4);
   lcd.backlight();
   pinMode(TdsSensorPin, INPUT);
@@ -513,6 +504,16 @@ void setup() {
   pinMode(BUTTON_S2, INPUT_PULLUP);
   pinMode(BUTTON_S3, INPUT_PULLUP);
   pinMode(BUTTON_S4, INPUT_PULLUP);
+  pinMode(flowsensor, INPUT);
+  digitalWrite(flowsensor, HIGH);
+
+  pulseCount = 0;
+  debit = 0.0;
+  flowmlt = 0;
+  totalmlt = 0;
+  oldTime = 0;
+
+  attachInterrupt(sensorInt, pulseCounter, FALLING);
 
   HT74HC595 -> set(0, LOW, true);
   HT74HC595 -> set(1, LOW, true);
@@ -532,9 +533,9 @@ void setup() {
   if (xTaskCreatePinnedToCore(dhtTask, "DHT Task", 2048, NULL, 1, NULL, 1) != pdPASS) {
     Serial.println("Failed to create DHT Task!");
   }
-  if (xTaskCreatePinnedToCore(waterflowTask, "Waterflow Task", 2048, NULL, 1, NULL, 1) != pdPASS) {
-    Serial.println("Failed to create Waterflow Task!");
-  }
+  // if (xTaskCreatePinnedToCore(waterflowTask, "Waterflow Task", 2048, NULL, 1, NULL, 1) != pdPASS) {
+  //   Serial.println("Failed to create Waterflow Task!");
+  // }
   if (xTaskCreatePinnedToCore(ultrasonicTask, "Ultrasonic Task", 2048, NULL, 1, NULL, 1) != pdPASS) {
     Serial.println("Failed to create Ultrasonic Task!");
   }
@@ -553,4 +554,37 @@ void setup() {
   xTaskCreatePinnedToCore(controlPumpTask, "Pump Control Task", 2048, NULL, 1, NULL, 1);
 }
 
-void loop() {}
+void loop() {
+  // mode Auto / Manual
+  if (mode == "Automatic") {
+    autoPompaPH();
+    autoNutrisi();
+    }
+  if((millis() - oldTime) > 1000){
+detachInterrupt(sensorInt);
+debit = ((1000.0 / (millis() - oldTime)) * pulseCount) / konstanta;
+oldTime = millis();
+flowmlt = (debit / 60) * 1000;
+totalmlt = flowmlt;
+
+unsigned int frac;
+
+Serial.print("Debit air: ");
+Serial.print(int(debit));
+Serial.print("L/min");
+Serial.print("\t");
+
+Serial.print("Volume: "); 
+Serial.print(totalmlt);
+Serial.println("mL"); 
+
+pulseCount = 0;
+
+attachInterrupt(sensorInt, pulseCounter, FALLING);
+  }
+   if (xSemaphoreTake(xMutex, portMAX_DELAY) == pdTRUE) {
+        waterflowdata = totalmlt;
+        xSemaphoreGive(xMutex);
+    }
+    vTaskDelay(pdMS_TO_TICKS(1000));
+}
