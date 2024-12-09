@@ -165,12 +165,13 @@ void mqttTask(void * pvParameters) {
   Serial.println("WiFi Connected!");
 
   mqttClient.setServer(broker, port);
+  mqttClient.setCallback(callback);
   while (!mqttClient.connected()) {
     Serial.println("Connecting to MQTT...");
     if (mqttClient.connect(clientID, mqttUsername, mqttPassword)) {
       mqttClient.subscribe("SmartAerophonik/Settings");
       mqttClient.subscribe("SmartAerophonik/Control");
-      mqttClient.subscribe("SmartAerophonik/Control_Send");
+      // mqttClient.subscribe("SmartAerophonik/Control_Send");
       Serial.println("Connected to MQTT and subscribed to control topic.");
     } else {
       Serial.printf("Failed to connect to MQTT: %d. Retrying...\n", mqttClient.state());
@@ -211,8 +212,10 @@ void mqttTask(void * pvParameters) {
 }
 
 void callback(char * topic, byte * payload, unsigned int length) {
-  payload[length] = '\0'; // Null-terminate the payload string
-  String message = String((char * ) payload);
+  String message = "";
+  for (unsigned int i = 0; i < length; i++) {
+    message += (char)payload[i];
+  }
 
   StaticJsonDocument <512> doc;
   DeserializationError error = deserializeJson(doc, message);
@@ -347,12 +350,6 @@ void controlPumpTask(void * pvParameters) {
     }
     lastButtonS4State = currentButtonS4State;
 
-    if (mode == "Automatic") {
-    autoPompaPH();
-    autoNutrisi();
-    autoSpary();
-    }
-
     vTaskDelay(pdMS_TO_TICKS(50));
   }
 }
@@ -362,7 +359,6 @@ void autoSpary() {
   unsigned long startMillis = start_spray * 60000; 
   unsigned long endMillis = end_spray * 60000;
 
-  // Check if the current time is between the start and end spray times
   if (currentTime >= startMillis && currentTime <= endMillis) {
     if (!pumpSprayingState) {
       pumpSprayingState = true;
@@ -571,4 +567,10 @@ void setup() {
   xTaskCreatePinnedToCore(controlPumpTask, "Pump Control Task", 2048, NULL, 1, NULL, 1);
 }
 
-void loop() {}
+void loop() {
+  if (mode == "Automatic") {
+    autoPompaPH();
+    autoNutrisi();
+    autoSpary();
+  }
+}
