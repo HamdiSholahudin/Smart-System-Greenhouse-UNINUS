@@ -12,15 +12,15 @@
 #include <DFRobot_SHT20.h>
 
 // === Konfigurasi WiFi dan MQTT ===
-const char * ssid = "R. MEETING/KELAS UNINUS (G102)";
-const char * password = "uninusunggul2025";
-const char * broker = "88.222.214.56";
-const int port = 1883;
+const char * ssid = "SMART GREENHOUSE UNINUS (2Ghz)";
+const char * password = "UNINUSLAB530";
+const char * mqtt_server = "88.222.214.56";
+const int mqtt_port = 1883;
+const char * mqtt_user = "SGH_1.0";
+const char * mqtt_password = "Teknik_Pertanian_2025";
+const char * clientID = "SmartAerophonik_UNINUS";
 const char * mqttSensorTopic = "SmartAerophonik/SensorData";
 const char * mqttControlTopic = "SmartAerophonik/Control_Send";
-const char * mqttUsername = "SGH_1.0";
-const char * mqttPassword = "Teknik_Pertanian_2025";
-const char * clientID = "SmartAerophonik_Uninus";
 
 WiFiClient wifiClient;
 PubSubClient mqttClient(wifiClient);
@@ -51,7 +51,7 @@ bool lastButtonS1State = HIGH, lastButtonS2State = HIGH, lastButtonS3State = HIG
 
 OneWire oneWire(DS18B20PIN);
 DallasTemperature ds18b20( & oneWire);
-DFRobot_SHT20 sht20(&Wire, SHT20_I2C_ADDR);
+DFRobot_SHT20 sht20( & Wire, SHT20_I2C_ADDR);
 
 #define DHTPIN 1
 #define DHTTYPE DHT22
@@ -69,7 +69,7 @@ HardwareSerial Ultrasonic_Sensor(2);
 
 // Variabel Global
 float phSensorValue = 0.0, tdsValue = 0.0, temperatureDS18B20 = 0.0;
-float temperatureDHT = 0.0, humidityDHT = 0.0, humiditySHT20 = 0.0, tangkiAir = 0,temperatureSHT20 = 0;
+float temperatureDHT = 0.0, humidityDHT = 0.0, humiditySHT20 = 0.0, tangkiAir = 0, temperatureSHT20 = 0;
 int distance = 0;
 
 float limitPhMin = 0;
@@ -78,10 +78,10 @@ float limitNutrisiMin = 0;
 float limitNutrisiMax = 0;
 float start_spray = 0;
 float end_spray = 0;
-float currentPhValue= 0; 
-float currentNutrisiValue= 0; 
+float currentPhValue = 0;
+float currentNutrisiValue = 0;
 
-String mode = "Manual"; 
+String mode = "Manual";
 
 unsigned char data_buffer[4] = {
   0
@@ -96,38 +96,6 @@ SemaphoreHandle_t xMutex;
 #define HT74HC595_OUT_EN 4
 std::shared_ptr < ShiftRegister74HC595_NonTemplate > HT74HC595 =
   std::make_shared < ShiftRegister74HC595_NonTemplate > (6, HT74HC595_DATA, HT74HC595_CLOCK, HT74HC595_LATCH);
-
-
-void sendPumpStatus(const char * pumpName, bool state, const char * type) {
-  if (!mqttClient.connected()) {
-    Serial.println("MQTT disconnected. Skipping status update.");
-    return;
-  }
-
-  StaticJsonDocument < 128 > jsonDoc;
-  jsonDoc["type"] = type;
-  jsonDoc["pompa"] = pumpName;
-  jsonDoc["status"] = state ? 1 : 0;
-  jsonDoc["device"] = "Aerophonik";
-
-  char jsonBuffer[128];
-  serializeJson(jsonDoc, jsonBuffer);
-
-  if (mqttClient.publish(mqttControlTopic, jsonBuffer)) {
-    Serial.printf("Status %s terkirim: %s\n", pumpName, state ? "ON" : "OFF");
-  } else {
-    Serial.printf("Gagal mengirim status %s!\n", pumpName);
-  }
-}
-
-void reconnectWiFi() {
-  while (WiFi.status() != WL_CONNECTED) {
-    Serial.println("Connecting to WiFi...");
-    WiFi.begin(ssid, password);
-    delay(1000);
-  }
-  Serial.println("WiFi connected.");
-}
 
 // === TASK RTOS ===
 void ds18b20Task(void * pvParameters) {
@@ -158,70 +126,59 @@ void dhtTask(void * pvParameters) {
   }
 }
 
-void mqttTask(void * pvParameters) {
+void setupWiFi() {
+  Serial.print("Connecting to WiFi");
+  WiFi.begin(ssid, password);
   while (WiFi.status() != WL_CONNECTED) {
-    reconnectWiFi();
+    delay(500);
+    Serial.print(".");
   }
-  Serial.println("WiFi Connected!");
+  Serial.println("\nWiFi connected");
+  Serial.print("IP address: ");
+  Serial.println(WiFi.localIP());
+}
 
-  mqttClient.setServer(broker, port);
-  mqttClient.setCallback(callback);
+void connectMQTT() {
+  while (WiFi.status() != WL_CONNECTED) {
+    setupWiFi();
+  }
+
+  mqttClient.setServer(mqtt_server, mqtt_port);
+  mqttClient.setCallback(mqttCallback); // Set callback function for incoming messages
+
   while (!mqttClient.connected()) {
-    Serial.println("Connecting to MQTT...");
-    if (mqttClient.connect(clientID, mqttUsername, mqttPassword)) {
+    Serial.print("Connecting to MQTT...");
+    if (mqttClient.connect("SmartHydroponik_Uninus", mqtt_user, mqtt_password)) {
+      Serial.println("Connected to MQTT Broker!");
       mqttClient.subscribe("SmartAerophonik/Settings");
-      mqttClient.subscribe("SmartAerophonik/Control");
-      // mqttClient.subscribe("SmartAerophonik/Control_Send");
-      Serial.println("Connected to MQTT and subscribed to control topic.");
+      mqttClient.subscribe("SmartAerophonik/Control"); // Subscribe to topic
     } else {
-      Serial.printf("Failed to connect to MQTT: %d. Retrying...\n", mqttClient.state());
-      vTaskDelay(pdMS_TO_TICKS(5000)); // Tunggu 5 detik
+      Serial.print("Failed, error code: ");
+      Serial.println(mqttClient.state());
+      Serial.println("Retrying in 5 seconds...");
+      delay(5000);
     }
-  }
-
-  for (;;) {
-    if (mqttClient.connected()) {
-      StaticJsonDocument < 256 > jsonDoc;
-
-      if (xSemaphoreTake(xMutex, portMAX_DELAY)) {
-        jsonDoc["ph_air"] = phSensorValue;
-        jsonDoc["tds"] = tdsValue;
-        jsonDoc["suhu_air"] = temperatureDS18B20;
-        jsonDoc["kelembaban_udara"] = humiditySHT20;
-        jsonDoc["volume_air"] = distance;
-        jsonDoc["panel_temp"] = temperatureDHT;
-        jsonDoc["device_id"] = 2;
-        xSemaphoreGive(xMutex);
-      }
-
-      char jsonBuffer[256];
-      serializeJson(jsonDoc, jsonBuffer);
-
-      if (mqttClient.publish(mqttSensorTopic, jsonBuffer)) {
-        Serial.println("Data sent to MQTT:");
-        Serial.println(jsonBuffer);
-      } else {
-        Serial.println("Failed to send data to MQTT!");
-      }
-    } else {
-      Serial.println("Reconnecting to MQTT...");
-      mqttClient.connect(clientID, mqttUsername, mqttPassword);
-    }
-    vTaskDelay(pdMS_TO_TICKS(5000));
   }
 }
 
-void callback(char * topic, byte * payload, unsigned int length) {
+void mqttCallback(char * topic, byte * payload, unsigned int length) {
   String message = "";
   for (unsigned int i = 0; i < length; i++) {
-    message += (char)payload[i];
+    message += (char) payload[i];
   }
 
-  StaticJsonDocument <512> doc;
-  DeserializationError error = deserializeJson(doc, message);
+  // Debug: Menampilkan topik dan pesan yang diterima
+  Serial.print("Received message on topic: ");
+  Serial.println(topic);
+  Serial.print("Message: ");
+  Serial.println(message);
 
+  // Parsing JSON
+  StaticJsonDocument < 512 > doc;
+  DeserializationError error = deserializeJson(doc, message);
   if (error) {
-    Serial.println("Failed to deserialize JSON control");
+    Serial.print("Failed to parse JSON: ");
+    Serial.println(error.f_str());
     return;
   }
 
@@ -233,75 +190,81 @@ void callback(char * topic, byte * payload, unsigned int length) {
     tangkiAir = doc["tangki_air"];
     start_spray = doc["waktu_spary_start"];
     end_spray = doc["waktu_spary_end"];
-
-    Serial.print("Limit PH Min: ");
-    Serial.println(limitPhMin);
-    Serial.print("Limit PH Max: ");
-    Serial.println(limitPhMax);
-    Serial.print("Limit Nutrisi Min: ");
-    Serial.println(limitNutrisiMin);
-    Serial.print("Limit Nutrisi Max: ");
-    Serial.println(limitNutrisiMax);
-    Serial.print("Tangki Air: ");
-    Serial.println(tangkiAir);
-    Serial.print("Waktu Spray Start: ");
-    Serial.println(start_spray);
-    Serial.print("Waktu Spray End: ");
-    Serial.println(end_spray);
-
   }
 
   if (String(topic) == "SmartAerophonik/Control") {
-  String type = doc["type"];
-  String pompa = doc["pompa"];
-  int status = doc["status"];
-  String device = doc["device"];
+    String type = doc["type"];
 
-  // Cek apakah tipe yang diterima adalah "control"
-  if (type == "control") {
-    if (pompa == "Pompa_PHUP") {
-      pumpPhUpState = (status == 1);
-      HT74HC595 -> set(RELAY_PH_UP, pumpPhUpState ? HIGH : LOW, true);
-      // sendPumpStatus("Pompa_PHUP", pumpPhUpState);
-    } else if (pompa == "Pompa_PHDOWN") {
-      pumpPhDownState = (status == 1);
-      HT74HC595 -> set(RELAY_PH_DOWN, pumpPhDownState ? HIGH : LOW, true);
-      // sendPumpStatus("Pompa_PHDOWN", pumpPhDownState);
-    } else if (pompa == "Pompa_Nutrisi") {
-      pumpZatAState = (status == 1);
-      pumpZatBState = (status == 1);
-      HT74HC595 -> set(RELAY_ZAT_A, pumpZatAState ? HIGH : LOW, true);
-      HT74HC595 -> set(RELAY_ZAT_B, pumpZatBState ? HIGH : LOW, true);
-      // sendPumpStatus("Pompa_Nutrisi", pumpZatBState);
-    } else if (pompa == "Pompa_Spraying") {
-      pumpSprayingState = (status == 1);
-      HT74HC595 -> set(RELAY_SPRAYING, pumpSprayingState ? HIGH : LOW, true);
-      // sendPumpStatus("Pompa_Spraying", pumpSprayingState);
-    }
-  } else if (type == "mode") {
-    if (doc.containsKey("mode")) {
-      mode = doc["mode"].as < String > (); // Set mode jika ada
+    // Cek apakah tipe yang diterima adalah "control"
+    if (type == "control") {
+      String pompa = doc["pompa"];
+      int status = doc["status"];
+      String device = doc["device"];
+
+      if (pompa == "Pompa_PHUP") {
+        pumpPhUpState = (status == 1);
+        HT74HC595 -> set(RELAY_PH_UP, pumpPhUpState ? HIGH : LOW, true);
+        // sendPumpStatus("Pompa_PHUP", pumpPhUpState);
+      } else if (pompa == "Pompa_PHDOWN") {
+        pumpPhDownState = (status == 1);
+        HT74HC595 -> set(RELAY_PH_DOWN, pumpPhDownState ? HIGH : LOW, true);
+        // sendPumpStatus("Pompa_PHDOWN", pumpPhDownState);
+      } else if (pompa == "Pompa_Nutrisi") {
+        pumpZatAState = (status == 1);
+        pumpZatBState = (status == 1);
+        HT74HC595 -> set(RELAY_ZAT_A, pumpZatAState ? HIGH : LOW, true);
+        HT74HC595 -> set(RELAY_ZAT_B, pumpZatBState ? HIGH : LOW, true);
+        // sendPumpStatus("Pompa_Nutrisi", pumpZatBState);
+      } else if (pompa == "Pompa_Spraying") {
+        pumpSprayingState = (status == 1);
+        HT74HC595 -> set(RELAY_SPRAYING, pumpSprayingState ? HIGH : LOW, true);
+        // sendPumpStatus("Pompa_Spraying", pumpSprayingState);
+      }
+    } else if (type == "mode") {
+      int dump =  doc["status"];
+      mode = dump ? "Automatis" : "Manual";
       Serial.println("Mode set to: " + mode);
-    } else {
-      Serial.println("Mode key not found in JSON");
     }
   }
 }
+
+
+void sendPumpStatus(const char * pumpName, bool state,const char * type) {
+  if (!mqttClient.connected()) {
+    Serial.println("MQTT disconnected. Skipping status update.");
+    return;
+  }
+
+  StaticJsonDocument < 128 > jsonDoc;
+  jsonDoc["type"] = type;
+  jsonDoc["pompa"] = pumpName;
+  jsonDoc["status"] = state ? 1 : 0;
+  jsonDoc["device"] = "Aerophonik";
+
+  char jsonBuffer[128];
+  serializeJson(jsonDoc, jsonBuffer);
+
+  if (mqttClient.publish(mqttControlTopic, jsonBuffer)) {
+    Serial.printf("Status %s terkirim: %s\n", pumpName, state ? "ON" : "OFF");
+  } else {
+    Serial.printf("Gagal mengirim status %s!\n", pumpName);
+  }
 }
 
-void sht20Task(void *pvParameters) {
-    for (;;) {
-        float temp = sht20.readTemperature(); 
-        float hum = sht20.readHumidity();     
 
-        if (xSemaphoreTake(xMutex, portMAX_DELAY) == pdTRUE) {
-            temperatureSHT20 = temp; 
-            humiditySHT20 = hum;    
-            xSemaphoreGive(xMutex);
-        }
+void sht20Task(void * pvParameters) {
+  for (;;) {
+    float temp = sht20.readTemperature();
+    float hum = sht20.readHumidity();
 
-        vTaskDelay(pdMS_TO_TICKS(2000)); 
+    if (xSemaphoreTake(xMutex, portMAX_DELAY) == pdTRUE) {
+      temperatureSHT20 = temp;
+      humiditySHT20 = hum;
+      xSemaphoreGive(xMutex);
     }
+
+    vTaskDelay(pdMS_TO_TICKS(2000));
+  }
 }
 
 void controlPumpTask(void * pvParameters) {
@@ -356,19 +319,19 @@ void controlPumpTask(void * pvParameters) {
 
 void autoSpary() {
   unsigned long currentTime = millis();
-  unsigned long startMillis = start_spray * 60000; 
+  unsigned long startMillis = start_spray * 60000;
   unsigned long endMillis = end_spray * 60000;
 
   if (currentTime >= startMillis && currentTime <= endMillis) {
     if (!pumpSprayingState) {
       pumpSprayingState = true;
-      HT74HC595->set(RELAY_SPRAYING, HIGH, true);
+      HT74HC595 -> set(RELAY_SPRAYING, HIGH, true);
       sendPumpStatus("Pompa_Spraying", pumpSprayingState, "status");
     }
   } else {
     if (pumpSprayingState) {
       pumpSprayingState = false;
-      HT74HC595->set(RELAY_SPRAYING, LOW, true);
+      HT74HC595 -> set(RELAY_SPRAYING, LOW, true);
       sendPumpStatus("Pompa_Spraying", pumpSprayingState, "status");
     }
   }
@@ -378,14 +341,14 @@ void autoPompaPH() {
   if (phSensorValue < limitPhMin) {
     if (!pumpPhUpState) {
       pumpPhUpState = true;
-      HT74HC595->set(RELAY_PH_UP, HIGH, true);
+      HT74HC595 -> set(RELAY_PH_UP, HIGH, true);
       sendPumpStatus("Pompa_PHUP", pumpPhUpState, "status");
       Serial.println("Pompa PH UP dihidupkan (pH terlalu rendah)");
     }
   } else if (phSensorValue > limitPhMax) {
     if (!pumpPhDownState) {
       pumpPhDownState = true;
-      HT74HC595->set(RELAY_PH_DOWN, HIGH, true);
+      HT74HC595 -> set(RELAY_PH_DOWN, HIGH, true);
       sendPumpStatus("Pompa_PHDOWN", pumpPhDownState, "status");
       Serial.println("Pompa PH DOWN dihidupkan (pH terlalu tinggi)");
     }
@@ -393,8 +356,8 @@ void autoPompaPH() {
     if (pumpPhUpState || pumpPhDownState) {
       pumpPhUpState = false;
       pumpPhDownState = false;
-      HT74HC595->set(RELAY_PH_UP, LOW, true);
-      HT74HC595->set(RELAY_PH_DOWN, LOW, true);
+      HT74HC595 -> set(RELAY_PH_UP, LOW, true);
+      HT74HC595 -> set(RELAY_PH_DOWN, LOW, true);
       sendPumpStatus("Pompa_PHUP", pumpPhUpState, "status");
       sendPumpStatus("Pompa_PHDOWN", pumpPhDownState, "status");
       Serial.println("Pompa PH dimatikan (pH dalam batas normal)");
@@ -407,8 +370,8 @@ void autoNutrisi() {
     if (!pumpZatAState && !pumpZatBState) {
       pumpZatAState = true;
       pumpZatBState = true;
-      HT74HC595->set(RELAY_ZAT_A, HIGH, true);
-      HT74HC595->set(RELAY_ZAT_B, HIGH, true);
+      HT74HC595 -> set(RELAY_ZAT_A, HIGH, true);
+      HT74HC595 -> set(RELAY_ZAT_B, HIGH, true);
       sendPumpStatus("Pompa_Nutrisi", pumpZatBState, "status");
       Serial.println("Pompa Nutrisi dihidupkan (Nutrisi terlalu rendah)");
     }
@@ -416,8 +379,8 @@ void autoNutrisi() {
     if (pumpZatAState && pumpZatBState) {
       pumpZatAState = false;
       pumpZatBState = false;
-      HT74HC595->set(RELAY_ZAT_A, LOW, true);
-      HT74HC595->set(RELAY_ZAT_B, LOW, true);
+      HT74HC595 -> set(RELAY_ZAT_A, LOW, true);
+      HT74HC595 -> set(RELAY_ZAT_B, LOW, true);
       sendPumpStatus("Pompa_Nutrisi", pumpZatBState, "status");
       Serial.println("Pompa Nutrisi dimatikan (Nutrisi cukup tinggi)");
     }
@@ -511,10 +474,45 @@ void lcdTask(void * pvParameters) {
   }
 }
 
+void sendSensorData() {
+  if (!mqttClient.connected()) {
+    Serial.println("MQTT disconnected. Skipping data send.");
+    return;
+  }
+
+  // Membuat objek JSON
+  StaticJsonDocument < 256 > jsonDoc;
+
+  // Menggunakan nilai random untuk sensor sementara
+  jsonDoc["ph_air"] = phSensorValue;
+  jsonDoc["tds"] = tdsValue;
+  jsonDoc["suhu_air"] = temperatureDS18B20;
+  jsonDoc["kelembaban_udara"] = humiditySHT20;
+  jsonDoc["volume_air"] = distance;
+  jsonDoc["panel_temp"] = temperatureDHT;
+  jsonDoc["device_id"] = 2;
+
+  // Mengonversi JSON ke buffer string
+  char jsonBuffer[256];
+  serializeJson(jsonDoc, jsonBuffer);
+
+  // Mengirimkan data ke topik MQTT
+  if (mqttClient.publish("SmartAerophonik/SensorData", jsonBuffer)) {
+    Serial.println("Data sensor terkirim:");
+    Serial.println(jsonBuffer);
+  } else {
+    Serial.println("Gagal mengirim data sensor.");
+  }
+}
+
 void setup() {
   Serial.begin(115200);
   Serial.println("Initializing...");
-
+  setupWiFi();
+  mqttClient.setServer(mqtt_server, mqtt_port);
+  mqttClient.setCallback(mqttCallback);
+  connectMQTT();
+  mqttClient.publish("SmartAeroponik/RequestSetting", "Request");
   ds18b20.begin();
   dht.begin();
   Ultrasonic_Sensor.begin(9600, SERIAL_8N1, RX, TX);
@@ -561,13 +559,30 @@ void setup() {
   if (xTaskCreatePinnedToCore(lcdTask, "LCD Task", 4098, NULL, 1, NULL, 1) != pdPASS) {
     Serial.println("Failed to create LCD Task!");
   }
-  if (xTaskCreatePinnedToCore(mqttTask, "MQTT Task", 4098, NULL, 2, NULL, 1) != pdPASS) {
-    Serial.println("Failed to create MQTT Task!");
-  }
   xTaskCreatePinnedToCore(controlPumpTask, "Pump Control Task", 2048, NULL, 1, NULL, 1);
 }
 
 void loop() {
+
+  Serial.print("Limit PH Min: ");
+  Serial.println(limitPhMin);
+  Serial.print("Limit PH Max: ");
+  Serial.println(limitPhMax);
+  Serial.print("Limit Nutrisi Min: ");
+  Serial.println(limitNutrisiMin);
+  Serial.print("Limit Nutrisi Max: ");
+  Serial.println(limitNutrisiMax);
+  Serial.print("Tangki Air: ");
+  Serial.println(tangkiAir);
+  Serial.print("Waktu Spray Start: ");
+  Serial.println(start_spray);
+  Serial.print("Waktu Spray End: ");
+  Serial.println(end_spray);
+  if (!mqttClient.connected()) {
+    connectMQTT();
+  }
+  sendSensorData();
+  mqttClient.loop();
   if (mode == "Automatic") {
     autoPompaPH();
     autoNutrisi();
