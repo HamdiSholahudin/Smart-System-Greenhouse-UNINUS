@@ -58,7 +58,7 @@ HardwareSerial Ultrasonic_Sensor(2);
 #define TdsSensorPin 11
 #define phSensorPin 13
 
-#define BUZZER_PIN 18 // Pin buzzer, atur sesuai kebutuhan Anda
+#define BUZZER_PIN 2 // Pin buzzer, atur sesuai kebutuhan Anda
 #define TANK_HEIGHT_CM 100 // Ketinggian tangki air dalam cm
 
 unsigned char data[4] = {};
