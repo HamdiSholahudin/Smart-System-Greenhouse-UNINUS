@@ -49,8 +49,8 @@ DHT dht(DHTPIN, DHTTYPE);
 
 LiquidCrystal_I2C lcd(0x27, 20, 4);
 
-#define RXD 43
-#define TXD 44
+#define RXD 44
+#define TXD 43
 
 HardwareSerial Ultrasonic_Sensor(2);
 
