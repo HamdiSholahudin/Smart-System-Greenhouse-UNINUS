@@ -416,6 +416,7 @@ void waterlevelTask(void *pvParameters) {
                         Serial.println(" cm");
                         
                         lastPrintTime = currentTime; // Update waktu terakhir mencetak
+                      distance = distance;
                     }
                 } else {
                     Serial.println("ERROR: Checksum mismatch");
