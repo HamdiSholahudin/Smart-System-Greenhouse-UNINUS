@@ -49,39 +49,33 @@ DHT dht(DHTPIN, DHTTYPE);
 
 LiquidCrystal_I2C lcd(0x27, 20, 4);
 
-#define RXD 43
-#define TXD 44
-
+#define RXD 44
+#define TXD 43
 HardwareSerial Ultrasonic_Sensor(2);
 
 // Sensor TDS dan pH
 #define TdsSensorPin 11
 #define phSensorPin 13
 
-#define BUZZER_PIN 18 // Pin buzzer, atur sesuai kebutuhan Anda
+#define BUZZER_PIN 2 // Pin buzzer, atur sesuai kebutuhan Anda
 #define TANK_HEIGHT_CM 100 // Ketinggian tangki air dalam cm
 
 unsigned char data[4] = {};
-int distance;
 unsigned long lastPrintTime = 0; // Waktu terakhir menampilkan data
 bool buzzerState = false; // Status buzzer
 
-byte sensorInt = 12; 
-byte flowsensor = 0;
+// --- Konfigurasi Flow Meter ---
+const int flowratepin = 12;       // Pin digital untuk sensor flow meter
+volatile long pulseCount = 0;  // Variabel untuk menghitung pulsa dari sensor
+const float flowFactor = 4.5;  // Konstanta flow meter (pulsa per liter)
+// --- Variabel untuk hasil ---
+float flowRate = 0;            // Laju aliran (mL/s)
 
-float konstanta = 4.5; //konstanta flow meter
-
-volatile byte pulseCount;
-
-float debit;
-unsigned int flowmlt;
-unsigned long totalmlt;
-unsigned long oldTime;
 
 // Variabel Global
 float phSensorValue = 0.0, temperatureDS18B20 = 0.0;
 float temperatureDHT = 0.0, humidityDHT = 0.0, waterflowdata = 0.0;
-int distance = 0,tdsValue = 0;
+int waterlevel = 0,tdsValue = 0;
 
 float limitPhMin;
 float limitPhMax;
@@ -374,6 +368,7 @@ void autoNutrisi() {
 // Ultrasonic Task
 void waterlevelTask(void *pvParameters) {
     while (true) {
+      int distance;
         if ( Ultrasonic_Sensor.available() >= 4) {
             if ( Ultrasonic_Sensor.read() == 0xFF) {
                 data[0] = 0xFF;
@@ -423,6 +418,11 @@ void waterlevelTask(void *pvParameters) {
             }
         }
 
+        if (xSemaphoreTake(xMutex, portMAX_DELAY) == pdTRUE) {
+            waterlevel = distance;
+            xSemaphoreGive(xMutex);
+        }
+
         // Jeda kecil untuk memproses data baru
         vTaskDelay(50 / portTICK_PERIOD_MS);
     }
@@ -458,6 +458,41 @@ void tdsTask(void * pvParameters) {
   }
 }
 
+void calculateFlowRate(void *parameter) {
+  unsigned long lastTime = 0; // Menyimpan waktu terakhir untuk interval 1 detik
+
+  for (;;) { // Loop task untuk FreeRTOS
+    unsigned long currentTime = millis();
+
+    // Hitung flow rate dalam mL/s
+    if (currentTime - lastTime >= 1000) { // Perbarui setiap 1 detik
+      flowRate = (pulseCount * 1000.0) / flowFactor;
+
+      // Kirim hasil ke serial monitor
+      Serial.print("Flow Rate: ");
+      Serial.print(flowRate);
+      Serial.println(" mL/s");
+
+      // Reset hitungan pulsa untuk periode berikutnya
+      pulseCount = 0;
+      lastTime = currentTime;
+    }
+    
+    if (xSemaphoreTake(xMutex, portMAX_DELAY) == pdTRUE) {
+      flowRate = waterflowdata;
+      xSemaphoreGive(xMutex);
+    }
+
+    // Task delay untuk memberikan waktu ke tugas lain
+    vTaskDelay(pdMS_TO_TICKS(2000)); // Delay 2000 ms
+  }
+}
+
+// --- Fungsi Interrupt Service Routine (ISR) ---
+void countPulse() {
+  pulseCount++; // Tambah hitungan pulsa setiap kali interrupt terjadi
+}
+
 // LCD Display Task
 void lcdTask(void * pvParameters) {
   for (;;) {
@@ -482,7 +517,7 @@ void lcdTask(void * pvParameters) {
 
       lcd.setCursor(12, 1);
       lcd.print("WL:");
-      lcd.print(distance, 1);
+      lcd.print(waterlevel, 1);
       lcd.print("cm");
 
       lcd.setCursor(0, 2);
@@ -535,8 +570,8 @@ void sendSensorData() {
         jsonDoc["ph_air"] = phSensorValue;
         jsonDoc["tds"] = tdsValue;
         jsonDoc["suhu_air"] = temperatureDS18B20;
-        jsonDoc["laju_air"] = totalmlt;
-        jsonDoc["volume_air"] = distance;
+        jsonDoc["laju_air"] = waterflowdata;
+        jsonDoc["volume_air"] = waterlevel;
         jsonDoc["panel_temp"] = temperatureDHT;
         jsonDoc["device_id"] = 1;                 // ID perangkat (misalnya 1)
 
@@ -575,19 +610,13 @@ void setup() {
   pinMode(BUTTON_S2, INPUT);
   pinMode(BUTTON_S3, INPUT);
   // pinMode(BUTTON_S4, INPUT);
-  pinMode(flowsensor, INPUT);
-  digitalWrite(flowsensor, HIGH);
+  pinMode(flowratepin, INPUT);
+
     pinMode(BUZZER_PIN, OUTPUT); // Set pin buzzer sebagai output
     digitalWrite(BUZZER_PIN, LOW); // Pastikan buzzer mati saat awal
 
 
-  pulseCount = 0;
-  debit = 0.0;
-  flowmlt = 0;
-  totalmlt = 0;
-  oldTime = 0;
-
-  attachInterrupt(sensorInt, pulseCounter, FALLING);
+  attachInterrupt(digitalPinToInterrupt(flowratepin), countPulse, RISING); // Interrupt pada sinyal RISING
 
   HT74HC595 -> set(0, LOW, true);
   HT74HC595 -> set(1, LOW, true);
@@ -625,7 +654,9 @@ void setup() {
   // if (xTaskCreatePinnedToCore(mqttTask, "MQTT Task", 4098, NULL, 2, NULL, 1) != pdPASS) {
   //   Serial.println("Failed to create MQTT Task!");
   // }
-  xTaskCreatePinnedToCore(controlPumpTask, "Pump Control Task", 2048, NULL, 7, NULL, 1);
+
+  xTaskCreatePinnedToCore(calculateFlowRate, "Flow rate Task", 2048, NULL, 7, NULL, 1);
+  xTaskCreatePinnedToCore(controlPumpTask, "Pump Control Task", 2048, NULL, 8, NULL, 1);
   HT74HC595 -> set(0, LOW, true);
   HT74HC595 -> set(1, LOW, true);
   HT74HC595 -> set(2, LOW, true);
@@ -633,30 +664,7 @@ void setup() {
   HT74HC595 -> set(4, LOW, true);
   HT74HC595 -> set(5, LOW, true);
 }
-void loop() {
-
-  if ((millis() - oldTime) > 1000) {
-    detachInterrupt(sensorInt);
-    debit = ((1000.0 / (millis() - oldTime)) * pulseCount) / konstanta;
-    oldTime = millis();
-    flowmlt = (debit / 60) * 1000;
-    totalmlt = flowmlt;
-    unsigned int frac;
-    Serial.print("Debit air: ");
-    Serial.print(int(debit));
-    Serial.print("L/min");
-    Serial.print("\t");
-    Serial.print("Volume: ");
-    Serial.print(totalmlt);
-    Serial.println("mL");
-    pulseCount = 0;
-    attachInterrupt(sensorInt, pulseCounter, FALLING);
-  }
-  if (xSemaphoreTake(xMutex, portMAX_DELAY) == pdTRUE) {
-    waterflowdata = totalmlt;
-    xSemaphoreGive(xMutex);
-  }
-  vTaskDelay(pdMS_TO_TICKS(1000));
+void loop() { 
 
   // mode Auto / Manual
   if (!mqttClient.connected()) {
@@ -668,7 +676,7 @@ void loop() {
     autoPompaPH();
     autoNutrisi();
   }
-   Serial.print("Limit PH Min: ");
+    Serial.print("Limit PH Min: ");
     Serial.println(limitPhMin);
     Serial.print("Limit PH Max: ");
     Serial.println(limitPhMax);
@@ -678,5 +686,5 @@ void loop() {
     Serial.println(limitNutrisiMax);
     Serial.print("Tangki Air: ");
     Serial.println(tangkiAir);
-  delay(2000);  
+    vTaskDelay(pdMS_TO_TICKS(2000));
 }
