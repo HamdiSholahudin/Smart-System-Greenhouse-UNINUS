@@ -9,7 +9,8 @@
 #include <Arduino.h>
 #include <ArduinoJson.h>
 #include "ShiftRegister74HC595_NonTemplate.h"
-#include <DFRobot_SHT20.h>
+#include <Adafruit_AHTX0.h>
+// #include <DFRobot_SHT20.h>
 
 // === Konfigurasi WiFi dan MQTT ===
 const char * ssid = "SMART GREENHOUSE UNINUS (2Ghz)";
@@ -26,66 +27,63 @@ WiFiClient wifiClient;
 PubSubClient mqttClient(wifiClient);
 
 // === Definisi Tombol dan Relay ===
-#define BUTTON_S1 8 // Tombol PH UP
-#define BUTTON_S2 4 // Tombol PH DOWN
+#define BUTTON_S1 4 // Tombol PH UP
+#define BUTTON_S2 8 // Tombol PH DOWN
 #define BUTTON_S3 14 // Tombol ZAT AB
 #define BUTTON_S4 12 // Tombol Spraying
-#define RELAY_PH_UP 1
-#define RELAY_PH_DOWN 2
-#define RELAY_ZAT_A 3
-#define RELAY_ZAT_B 0
+#define RELAY_PH_UP 0
+#define RELAY_PH_DOWN 1
+#define RELAY_ZAT_A 2
+#define RELAY_ZAT_B 3
 #define RELAY_SPRAYING 4
 #define SENSOR 27
 #define DS18B20PIN 9
 #define FLOW_SENSOR_PIN 27
-
-// Variabel untuk menghitung laju aliran
-volatile unsigned int flowFrequency = 0;
-float flowRate = 0.0;
-float flowRateMps = 0.0;
-unsigned long totalMilliLiter = 0;
-unsigned long lastFlowCalculationTime = 0;
 
 bool pumpPhUpState = false, pumpPhDownState = false, pumpZatAState = false, pumpZatBState = false, pumpSprayingState = false;
 bool lastButtonS1State = HIGH, lastButtonS2State = HIGH, lastButtonS3State = HIGH, lastButtonS4State = HIGH;
 
 OneWire oneWire(DS18B20PIN);
 DallasTemperature ds18b20( & oneWire);
-DFRobot_SHT20 sht20( & Wire, SHT20_I2C_ADDR);
+Adafruit_AHTX0 aht;
+// DFRobot_SHT20 sht20( & Wire, SHT20_I2C_ADDR);
+LiquidCrystal_I2C lcd(0x27, 20, 4);
 
 #define DHTPIN 1
 #define DHTTYPE DHT22
 DHT dht(DHTPIN, DHTTYPE);
 
-LiquidCrystal_I2C lcd(0x27, 20, 4);
-
-#define RXD 36
-#define TXD 37
+#define RXD 44
+#define TXD 43
 HardwareSerial Ultrasonic_Sensor(2);
 
 // Sensor TDS dan pH
 #define TdsSensorPin 11
 #define phSensorPin 13
 
-// Variabel Global
-float phSensorValue = 0.0, tdsValue = 0.0, temperatureDS18B20 = 0.0;
-float temperatureDHT = 0.0, humidityDHT = 0.0, humiditySHT20 = 0.0, tangkiAir = 0, temperatureSHT20 = 0;
-int distance = 0;
+#define BUZZER_PIN 2 // Pin buzzer, atur sesuai kebutuhan Anda
+#define TANK_HEIGHT_CM 38 // Ketinggian tangki air dalam cm
 
-float limitPhMin = 0;
-float limitPhMax = 0;
-float limitNutrisiMin = 0;
-float limitNutrisiMax = 0;
-float start_spray = 0;
-float end_spray = 0;
-float currentPhValue = 0;
-float currentNutrisiValue = 0;
+unsigned char data[4] = {};
+unsigned long lastPrintTime = 0; // Waktu terakhir menampilkan data
+bool buzzerState = false; // Status buzzer
+
+// Variabel Global
+float phSensorValue = 0.0,  temperatureDS18B20 = 0.0;
+float temperatureDHT = 0.0, humidityDHT = 0.0, RHLevel = 0.0;
+int waterlevel = 0, tdsValue = 0;
+
+float limitPhMin;
+float limitPhMax;
+int limitNutrisiMin;
+int limitNutrisiMax;
+float start_spray;
+float end_spray;
+float currentPhValue;
+int currentNutrisiValue;
+int tangkiAir;
 
 String mode = "Manual";
-
-unsigned char data_buffer[4] = {
-  0
-};
 
 SemaphoreHandle_t xMutex;
 
@@ -251,20 +249,45 @@ void sendPumpStatus(const char * pumpName, bool state,const char * type) {
 }
 
 
-void sht20Task(void * pvParameters) {
-  for (;;) {
-    float temp = sht20.readTemperature();
-    float hum = sht20.readHumidity();
+// void sht20Task(void * pvParameters) {
+//   for (;;) {
+//     float temp = sht20.readTemperature();
+//     float hum = sht20.readHumidity();
 
-    if (xSemaphoreTake(xMutex, portMAX_DELAY) == pdTRUE) {
-      temperatureSHT20 = temp;
-      humiditySHT20 = hum;
-      xSemaphoreGive(xMutex);
-    }
+//     if (xSemaphoreTake(xMutex, portMAX_DELAY) == pdTRUE) {
+//       temperatureSHT20 = temp;
+//       humiditySHT20 = hum;
+//       xSemaphoreGive(xMutex);
+//     }
 
-    vTaskDelay(pdMS_TO_TICKS(2000));
-  }
-}
+//     vTaskDelay(pdMS_TO_TICKS(2000));
+//   }
+// }
+
+// void readRHTask(void *parameter) {
+//     sensors_event_t tempEvent, humidityEvent;
+//     for (;;) {
+//         // Membaca data suhu dan kelembapan
+//         aht.getEvent(&humidityEvent, &tempEvent);
+
+//         // Menampilkan data suhu
+//         // Serial.print("T: ");
+//         // Serial.print(tempEvent.temperature);
+//         // Serial.print(" °C\t RH: ");
+
+//         //Menampilkan data kelembapan
+//         Serial.print("RH: ");
+//         Serial.print(humidityEvent.relative_humidity);
+//         Serial.println(" %");
+
+//       if (xSemaphoreTake(xMutex, portMAX_DELAY) == pdTRUE) {
+//             RHLevel = humidityEvent.relative_humidity;
+//             xSemaphoreGive(xMutex);
+//         }
+//     }
+//       // Tunggu selama 1 detik
+//         vTaskDelay(2000 / portTICK_PERIOD_MS);
+// }
 
 void controlPumpTask(void * pvParameters) {
   const int debounceDelay = 50;
@@ -387,27 +410,66 @@ void autoNutrisi() {
 }
 
 // Ultrasonic Task
-void ultrasonicTask(void * pvParameters) {
-  for (;;) {
-    if (Ultrasonic_Sensor.available() > 0) {
-      vTaskDelay(pdMS_TO_TICKS(4));
-      if (Ultrasonic_Sensor.read() == 0xff) {
-        data_buffer[0] = 0xff;
-        for (int i = 1; i < 4; i++) {
-          data_buffer[i] = Ultrasonic_Sensor.read();
+void waterlevelTask(void *pvParameters) {
+    int distance;
+    while (true) {
+        if ( Ultrasonic_Sensor.available() >= 4) {
+            if ( Ultrasonic_Sensor.read() == 0xFF) {
+                data[0] = 0xFF;
+                for (int i = 1; i < 4; i++) {
+                    data[i] =  Ultrasonic_Sensor.read();
+                }
+
+                // Verifikasi checksum
+                unsigned char CS = data[0] + data[1] + data[2];
+                if (data[3] == CS) {
+                    distance = (data[1] << 8) + data[2];
+                    unsigned long currentTime = millis(); // Waktu saat ini
+
+                    // Hitung ketinggian air dalam tangki
+                    int waterLevel1 = TANK_HEIGHT_CM - (distance / 10); // Konversi mm ke cm
+
+                    // Kondisi untuk buzzer
+                    if (waterLevel1 <= 10 || (distance / 10) <= 5) {
+                        if (!buzzerState) { // Hanya cetak jika status berubah
+                            Serial.println("BUZZER ON: Ketinggian kritis terdeteksi!");
+                            buzzerState = true;
+                        }
+                        digitalWrite(BUZZER_PIN, HIGH); // Buzzer menyala
+                    } else {
+                        if (buzzerState) { // Hanya cetak jika status berubah
+                            Serial.println("BUZZER OFF: Ketinggian aman.");
+                            buzzerState = false;
+                        }
+                        digitalWrite(BUZZER_PIN, LOW); // Buzzer mati
+                    }
+
+                    // Tampilkan data di Serial Monitor setiap 1 detik
+                    if (currentTime - lastPrintTime >= 1000) { // Cek jika 1 detik telah berlalu
+                        Serial.print("distance=");
+                        Serial.print(distance / 10);
+                        Serial.println(" cm");
+                        
+                        Serial.print("Water Level=");
+                        Serial.print(waterLevel1);
+                        Serial.println(" cm");
+                        
+                        lastPrintTime = currentTime; // Update waktu terakhir mencetak
+                    }
+                } else {
+                    Serial.println("ERROR: Checksum mismatch");
+                }
+            }
         }
-        unsigned char CS = data_buffer[0] + data_buffer[1] + data_buffer[2];
-        if (data_buffer[3] == CS) {
-          int dist = (data_buffer[1] << 8) + data_buffer[2] / 10;
-          if (xSemaphoreTake(xMutex, portMAX_DELAY) == pdTRUE) {
-            distance = dist;
+
+        if (xSemaphoreTake(xMutex, portMAX_DELAY) == pdTRUE) {
+            waterlevel = TANK_HEIGHT_CM - (distance / 10);;
             xSemaphoreGive(xMutex);
-          }
         }
-      }
+
+        // Jeda kecil untuk memproses data baru
+        vTaskDelay(50 / portTICK_PERIOD_MS);
     }
-    vTaskDelay(pdMS_TO_TICKS(1000));
-  }
 }
 
 // pH Sensor Task
@@ -457,13 +519,13 @@ void lcdTask(void * pvParameters) {
       // lcd.print(humidityDHT, 1);
       // lcd.print("%");
       lcd.setCursor(0, 1);
-      lcd.print("RH: ");
-      lcd.print(humiditySHT20, 1);
+      lcd.print("RH:");
+      lcd.print(RHLevel, 1);
       lcd.print("% ");
 
       lcd.setCursor(12, 1);
       lcd.print("WL:");
-      lcd.print(distance, 1);
+      lcd.print(waterlevel, 1);
       lcd.print("cm");
 
       lcd.setCursor(0, 2);
@@ -516,8 +578,8 @@ void sendSensorData() {
   jsonDoc["ph_air"] = phSensorValue;
   jsonDoc["tds"] = tdsValue;
   jsonDoc["suhu_air"] = temperatureDS18B20;
-  jsonDoc["kelembaban_udara"] = humiditySHT20;
-  jsonDoc["volume_air"] = distance;
+  jsonDoc["kelembaban_udara"] = RHLevel;
+  jsonDoc["volume_air"] = waterlevel;
   jsonDoc["panel_temp"] = temperatureDHT;
   jsonDoc["device_id"] = 2;
 
@@ -538,14 +600,23 @@ void setup() {
   Serial.begin(115200);
   Serial.println("Initializing...");
   setupWiFi();
+
   mqttClient.setServer(mqtt_server, mqtt_port);
   mqttClient.setCallback(mqttCallback);
   connectMQTT();
   mqttClient.publish("SmartAeroponik/RequestSetting", "Request");
   ds18b20.begin();
   dht.begin();
+      // Inisialisasi sensor
+    if (!aht.begin()) {
+        Serial.println("Sensor AHT tidak ditemukan. Periksa koneksi!");
+        while (true) delay(10);
+    }
+    Serial.println("Sensor AHT10/AHT20 terdeteksi");
+
+
   Ultrasonic_Sensor.begin(9600, SERIAL_8N1, RX, TX);
-  Wire.begin(16, 17);
+  
 
   lcd.init(16, 17);
   lcd.backlight();
@@ -574,10 +645,10 @@ void setup() {
   if (xTaskCreatePinnedToCore(dhtTask, "DHT Task", 2048, NULL, 2, NULL, 1) != pdPASS) {
     Serial.println("Failed to create DHT Task!");
   }
-  if (xTaskCreatePinnedToCore(sht20Task, "Sht20 Task", 2048, NULL, 2, NULL, 1) != pdPASS) {
-    Serial.println("Failed to create Waterflow Task!");
-  }
-  if (xTaskCreatePinnedToCore(ultrasonicTask, "Ultrasonic Task", 2048, NULL, 4, NULL, 1) != pdPASS) {
+  // if (xTaskCreatePinnedToCore(readRHTask, "RH Task", 2048, NULL, 3, NULL, 1) != pdPASS) {
+  //   Serial.println("Failed to create RH Task!");
+  // }
+  if (xTaskCreatePinnedToCore(waterlevelTask, "Ultrasonic Task", 2048, NULL, 4, NULL, 1) != pdPASS) {
     Serial.println("Failed to create Ultrasonic Task!");
   }
   if (xTaskCreatePinnedToCore(phTask, "pH Task", 2048, NULL, 5, NULL, 1) != pdPASS) {
@@ -593,34 +664,10 @@ void setup() {
 }
 
 void loop() {
-
-  Serial.print("Limit PH Min: ");
-  Serial.println(limitPhMin);
-  Serial.print("Limit PH Max: ");
-  Serial.println(limitPhMax);
-  Serial.print("Limit Nutrisi Min: ");
-  Serial.println(limitNutrisiMin);
-  Serial.print("Limit Nutrisi Max: ");
-  Serial.println(limitNutrisiMax);
-  Serial.print("Tangki Air: ");
-  Serial.println(tangkiAir);
-  Serial.print("Waktu Spray Start: ");
-  Serial.println(start_spray);
-  Serial.print("Waktu Spray End: ");
-  Serial.println(end_spray);
-  
-  if (!mqttClient.connected()) {
-    connectMQTT();
-  
-  }
-  
-  sendSensorData();
-  
-  mqttClient.loop();
-  
-  if (mode == "Automatic") {
-    autoPompaPH();
-    autoNutrisi();
-    autoSpary();
-  }
+  // put your main code here, to run repeatedly:
 }
+
+// // put function definitions here:
+// int myFunction(int x, int y) {
+//   return x + y;
+// }

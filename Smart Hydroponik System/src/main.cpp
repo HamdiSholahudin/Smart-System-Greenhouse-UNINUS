@@ -9,6 +9,7 @@
 #include <Arduino.h>
 #include <ArduinoJson.h>
 #include "ShiftRegister74HC595_NonTemplate.h"
+#include <HardwareSerial.h>
 
 // === Konfigurasi WiFi dan MQTT ===
 const char* ssid = "SMART GREENHOUSE UNINUS (2Ghz)";
@@ -49,8 +50,8 @@ DHT dht(DHTPIN, DHTTYPE);
 
 LiquidCrystal_I2C lcd(0x27, 20, 4);
 
-#define RXD 44
-#define TXD 43
+#define RX 44
+#define TX 43
 HardwareSerial Ultrasonic_Sensor(2);
 
 // Sensor TDS dan pH
@@ -65,17 +66,14 @@ unsigned long lastPrintTime = 0; // Waktu terakhir menampilkan data
 bool buzzerState = false; // Status buzzer
 
 // --- Konfigurasi Flow Meter ---
-const int flowratepin = 12;       // Pin digital untuk sensor flow meter
+#define flowratepin  12       // Pin digital untuk sensor flow meter
 volatile long pulseCount = 0;  // Variabel untuk menghitung pulsa dari sensor
-const float flowFactor = 4.5;  // Konstanta flow meter (pulsa per liter)
-// --- Variabel untuk hasil ---
-float flowRate = 0;            // Laju aliran (mL/s)
-
+const float flowFactor = 4.8;  // Konstanta flow meter (pulsa per liter)
 
 // Variabel Global
 float phSensorValue = 0.0, temperatureDS18B20 = 0.0;
 float temperatureDHT = 0.0, humidityDHT = 0.0, waterflowdata = 0.0;
-int waterlevel = 0,tdsValue = 0;
+int waterlevel = 0, tdsValue = 0, flowRate = 0;
 
 float limitPhMin;
 float limitPhMax;
@@ -364,11 +362,10 @@ void autoNutrisi() {
   }
 }
 
-
 // Ultrasonic Task
 void waterlevelTask(void *pvParameters) {
+    int distance;
     while (true) {
-      int distance;
         if ( Ultrasonic_Sensor.available() >= 4) {
             if ( Ultrasonic_Sensor.read() == 0xFF) {
                 data[0] = 0xFF;
@@ -383,10 +380,10 @@ void waterlevelTask(void *pvParameters) {
                     unsigned long currentTime = millis(); // Waktu saat ini
 
                     // Hitung ketinggian air dalam tangki
-                    float waterLevel = TANK_HEIGHT_CM - (distance / 10); // Konversi mm ke cm
+                    int waterLevel1 = TANK_HEIGHT_CM - (distance / 10); // Konversi mm ke cm
 
                     // Kondisi untuk buzzer
-                    if (waterLevel <= 10 || (distance / 10) <= 5) {
+                    if (waterLevel1 <= 10 || (distance / 10) <= 5) {
                         if (!buzzerState) { // Hanya cetak jika status berubah
                             Serial.println("BUZZER ON: Ketinggian kritis terdeteksi!");
                             buzzerState = true;
@@ -407,7 +404,7 @@ void waterlevelTask(void *pvParameters) {
                         Serial.println(" cm");
                         
                         Serial.print("Water Level=");
-                        Serial.print(waterLevel);
+                        Serial.print(waterLevel1);
                         Serial.println(" cm");
                         
                         lastPrintTime = currentTime; // Update waktu terakhir mencetak
@@ -419,7 +416,7 @@ void waterlevelTask(void *pvParameters) {
         }
 
         if (xSemaphoreTake(xMutex, portMAX_DELAY) == pdTRUE) {
-            waterlevel = distance;
+            waterlevel = TANK_HEIGHT_CM - (distance / 10);;
             xSemaphoreGive(xMutex);
         }
 
@@ -464,25 +461,24 @@ void calculateFlowRate(void *parameter) {
   for (;;) { // Loop task untuk FreeRTOS
     unsigned long currentTime = millis();
 
-    // Hitung flow rate dalam mL/s
-    if (currentTime - lastTime >= 1000) { // Perbarui setiap 1 detik
-      flowRate = (pulseCount * 1000.0) / flowFactor;
+    // Hitung flow rate dalam L/m
+    if (currentTime - lastTime >= 5000) { // Perbarui setiap 1 detik
+      flowRate = (pulseCount * 60) / flowFactor;
 
       // Kirim hasil ke serial monitor
       Serial.print("Flow Rate: ");
-      Serial.print(flowRate);
-      Serial.println(" mL/s");
+      Serial.print(flowRate/1000);
+      Serial.println(" L/m");
 
       // Reset hitungan pulsa untuk periode berikutnya
       pulseCount = 0;
       lastTime = currentTime;
-    }
-    
+    }  
+
     if (xSemaphoreTake(xMutex, portMAX_DELAY) == pdTRUE) {
-      flowRate = waterflowdata;
+      waterflowdata = flowRate;
       xSemaphoreGive(xMutex);
     }
-
     // Task delay untuk memberikan waktu ke tugas lain
     vTaskDelay(pdMS_TO_TICKS(2000)); // Delay 2000 ms
   }
@@ -513,7 +509,7 @@ void lcdTask(void * pvParameters) {
       lcd.setCursor(0, 1);
       lcd.print("WF:");
       lcd.print(waterflowdata, 1);
-      lcd.print("mL/s");
+      lcd.print("L/m");
 
       lcd.setCursor(12, 1);
       lcd.print("WL:");
@@ -576,8 +572,7 @@ void sendSensorData() {
         jsonDoc["device_id"] = 1;                 // ID perangkat (misalnya 1)
 
     // Mengonversi JSON ke buffer string
-    char jsonBuffer[256];
-    serializeJson(jsonDoc, jsonBuffer);
+    char jsonBuffer[256]; serializeJson(jsonDoc, jsonBuffer);
 
     // Mengirimkan data ke topik MQTT
     if (mqttClient.publish("SmartHydroponik/SensorData", jsonBuffer)) {
@@ -590,20 +585,26 @@ void sendSensorData() {
 
 void setup() {
   Serial.begin(115200);
+  Wire.begin(16, 17);
+
   Serial.println("Initializing...");
   setupWiFi();
+  
   mqttClient.setServer(mqtt_server, mqtt_port);
   mqttClient.setCallback(mqttCallback);
   connectMQTT(); 
   mqttClient.publish("SmartHydroponik/RequestSetting","Request");
+  
   ds18b20.begin();
+  
   dht.begin();
+  
   Ultrasonic_Sensor.begin(9600, SERIAL_8N1, RX, TX);
-  Wire.begin(16, 17);
+  
   lcd.init(16,17);
-
   // lcd.begin();
   lcd.backlight();
+  
   pinMode(TdsSensorPin, INPUT);
   pinMode(HT74HC595_OUT_EN, OUTPUT);
   pinMode(BUTTON_S1, INPUT);
@@ -611,10 +612,8 @@ void setup() {
   pinMode(BUTTON_S3, INPUT);
   // pinMode(BUTTON_S4, INPUT);
   pinMode(flowratepin, INPUT);
-
-    pinMode(BUZZER_PIN, OUTPUT); // Set pin buzzer sebagai output
-    digitalWrite(BUZZER_PIN, LOW); // Pastikan buzzer mati saat awal
-
+  pinMode(BUZZER_PIN, OUTPUT); // Set pin buzzer sebagai output
+  digitalWrite(BUZZER_PIN, LOW); // Pastikan buzzer mati saat awal
 
   attachInterrupt(digitalPinToInterrupt(flowratepin), countPulse, RISING); // Interrupt pada sinyal RISING
 
@@ -636,9 +635,6 @@ void setup() {
   if (xTaskCreatePinnedToCore(dhtTask, "DHT Task", 2048, NULL, 2, NULL, 1) != pdPASS) {
     Serial.println("Failed to create DHT Task!");
   }
-  // if (xTaskCreatePinnedToCore(waterflowTask, "Waterflow Task", 2048, NULL, 1, NULL, 1) != pdPASS) {
-  //   Serial.println("Failed to create Waterflow Task!");
-  // }
   if (xTaskCreatePinnedToCore(waterlevelTask, "Ultrasonic Task", 2048, NULL, 3, NULL, 1) != pdPASS) {
     Serial.println("Failed to create Ultrasonic Task!");
   }
@@ -654,9 +650,9 @@ void setup() {
   // if (xTaskCreatePinnedToCore(mqttTask, "MQTT Task", 4098, NULL, 2, NULL, 1) != pdPASS) {
   //   Serial.println("Failed to create MQTT Task!");
   // }
-
   xTaskCreatePinnedToCore(calculateFlowRate, "Flow rate Task", 2048, NULL, 7, NULL, 1);
   xTaskCreatePinnedToCore(controlPumpTask, "Pump Control Task", 2048, NULL, 8, NULL, 1);
+  
   HT74HC595 -> set(0, LOW, true);
   HT74HC595 -> set(1, LOW, true);
   HT74HC595 -> set(2, LOW, true);
