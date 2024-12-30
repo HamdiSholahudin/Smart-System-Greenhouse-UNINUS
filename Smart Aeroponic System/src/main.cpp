@@ -10,11 +10,14 @@
 #include <ArduinoJson.h>
 #include "ShiftRegister74HC595_NonTemplate.h"
 #include <Adafruit_AHTX0.h>
+#include "pin_config.h"
 // #include <DFRobot_SHT20.h>
 
-// === Konfigurasi WiFi dan MQTT ===
+// === Konfigurasi WiFi ===
 const char * ssid = "SMART GREENHOUSE UNINUS (2Ghz)";
 const char * password = "UNINUSLAB530";
+
+// === Konfigurasi MQTT ===
 const char * mqtt_server = "88.222.214.56";
 const int mqtt_port = 1883;
 const char * mqtt_user = "SGH_1.0";
@@ -36,9 +39,7 @@ PubSubClient mqttClient(wifiClient);
 #define RELAY_ZAT_A 2
 #define RELAY_ZAT_B 3
 #define RELAY_SPRAYING 4
-#define SENSOR 27
 #define DS18B20PIN 9
-#define FLOW_SENSOR_PIN 27
 
 bool pumpPhUpState = false, pumpPhDownState = false, pumpZatAState = false, pumpZatBState = false, pumpSprayingState = false;
 bool lastButtonS1State = HIGH, lastButtonS2State = HIGH, lastButtonS3State = HIGH, lastButtonS4State = HIGH;
@@ -87,11 +88,6 @@ String mode = "Manual";
 
 SemaphoreHandle_t xMutex;
 
-// Shift Register
-#define HT74HC595_CLOCK 5
-#define HT74HC595_LATCH 6
-#define HT74HC595_DATA 7
-#define HT74HC595_OUT_EN 4
 std::shared_ptr < ShiftRegister74HC595_NonTemplate > HT74HC595 =
   std::make_shared < ShiftRegister74HC595_NonTemplate > (6, HT74HC595_DATA, HT74HC595_CLOCK, HT74HC595_LATCH);
 
@@ -104,7 +100,7 @@ void ds18b20Task(void * pvParameters) {
       temperatureDS18B20 = temp;
       xSemaphoreGive(xMutex);
     }
-    vTaskDelay(pdMS_TO_TICKS(3000)); // Interval 3 detik
+    vTaskDelay(pdMS_TO_TICKS(2000)); // Interval 2 detik
   }
 }
 // DHT Task
@@ -264,30 +260,25 @@ void sendPumpStatus(const char * pumpName, bool state,const char * type) {
 //   }
 // }
 
-// void readRHTask(void *parameter) {
-//     sensors_event_t tempEvent, humidityEvent;
-//     for (;;) {
-//         // Membaca data suhu dan kelembapan
-//         aht.getEvent(&humidityEvent, &tempEvent);
+void readRHTask(void *parameter) {
+  sensors_event_t tempEvent, humidityEvent;
+  for (;;) {
+    // Membaca data suhu dan kelembapan
+    aht.getEvent(&humidityEvent, &tempEvent);
 
-//         // Menampilkan data suhu
-//         // Serial.print("T: ");
-//         // Serial.print(tempEvent.temperature);
-//         // Serial.print(" °C\t RH: ");
+    //Menampilkan data kelembapan
+    Serial.print("RH: ");
+    Serial.print(humidityEvent.relative_humidity);
+    Serial.println(" %");
 
-//         //Menampilkan data kelembapan
-//         Serial.print("RH: ");
-//         Serial.print(humidityEvent.relative_humidity);
-//         Serial.println(" %");
-
-//       if (xSemaphoreTake(xMutex, portMAX_DELAY) == pdTRUE) {
-//             RHLevel = humidityEvent.relative_humidity;
-//             xSemaphoreGive(xMutex);
-//         }
-//     }
-//       // Tunggu selama 1 detik
-//         vTaskDelay(2000 / portTICK_PERIOD_MS);
-// }
+    if (xSemaphoreTake(xMutex, portMAX_DELAY) == pdTRUE) {
+      RHLevel = humidityEvent.relative_humidity;
+      xSemaphoreGive(xMutex);
+    }
+    // Tunggu selama 1 detik
+    vTaskDelay(2000 / portTICK_PERIOD_MS);
+  }
+}
 
 void controlPumpTask(void * pvParameters) {
   const int debounceDelay = 50;
@@ -607,13 +598,13 @@ void setup() {
   mqttClient.publish("SmartAeroponik/RequestSetting", "Request");
   ds18b20.begin();
   dht.begin();
-      // Inisialisasi sensor
-    if (!aht.begin()) {
-        Serial.println("Sensor AHT tidak ditemukan. Periksa koneksi!");
-        while (true) delay(10);
+  
+  if (!aht.begin()) {
+    Serial.println("Sensor AHT tidak ditemukan. Periksa koneksi!");
+    while (true) {
+      delay(100);  // Memberikan penundaan agar tidak membebani prosesor
     }
-    Serial.println("Sensor AHT10/AHT20 terdeteksi");
-
+  }
 
   Ultrasonic_Sensor.begin(9600, SERIAL_8N1, RX, TX);
   
@@ -639,32 +630,40 @@ void setup() {
     Serial.println("Failed to create mutex!");
     while (1);
   }
-  if (xTaskCreatePinnedToCore(ds18b20Task, "DS18B20 Task", 2048, NULL, 1, NULL, 1) != pdPASS) {
+
+  if (xTaskCreatePinnedToCore(controlPumpTask, "Pump Control Task", 2048, NULL, 5, NULL, 1) != pdPASS) {
+    Serial.println("Failed to create Pump Control Task!");
+  }
+  if (xTaskCreatePinnedToCore(waterlevelTask, "Water Level Task", 2048, NULL, 4, NULL, 1) != pdPASS) {
+    Serial.println("Failed to create Water Level Task!");
+  }
+  if (xTaskCreatePinnedToCore(ds18b20Task, "DS18B20 Task", 2048, NULL, 3, NULL, 0) != pdPASS) {
     Serial.println("Failed to create DS18B20 Task!");
   }
-  if (xTaskCreatePinnedToCore(dhtTask, "DHT Task", 2048, NULL, 2, NULL, 1) != pdPASS) {
-    Serial.println("Failed to create DHT Task!");
-  }
-  // if (xTaskCreatePinnedToCore(readRHTask, "RH Task", 2048, NULL, 3, NULL, 1) != pdPASS) {
-  //   Serial.println("Failed to create RH Task!");
-  // }
-  if (xTaskCreatePinnedToCore(waterlevelTask, "Ultrasonic Task", 2048, NULL, 4, NULL, 1) != pdPASS) {
-    Serial.println("Failed to create Ultrasonic Task!");
-  }
-  if (xTaskCreatePinnedToCore(phTask, "pH Task", 2048, NULL, 5, NULL, 1) != pdPASS) {
+  if (xTaskCreatePinnedToCore(phTask, "pH Task", 2048, NULL, 3, NULL, 0) != pdPASS) {
     Serial.println("Failed to create pH Task!");
   }
-  if (xTaskCreatePinnedToCore(tdsTask, "TDS Task", 2048, NULL, 6, NULL, 1) != pdPASS) {
+  if (xTaskCreatePinnedToCore(tdsTask, "TDS Task", 2048, NULL, 3, NULL, 0) != pdPASS) {
     Serial.println("Failed to create TDS Task!");
   }
-  if (xTaskCreatePinnedToCore(lcdTask, "LCD Task", 4098, NULL, 7, NULL, 1) != pdPASS) {
+  if (xTaskCreatePinnedToCore(dhtTask, "DHT Task", 2048, NULL, 2, NULL, 0) != pdPASS) {
+    Serial.println("Failed to create DHT Task!");
+  }
+  if (xTaskCreatePinnedToCore(lcdTask, "LCD Task", 2048, NULL, 1, NULL, 1) != pdPASS) {
     Serial.println("Failed to create LCD Task!");
   }
-  xTaskCreatePinnedToCore(controlPumpTask, "Pump Control Task", 2048, NULL, 8, NULL, 1);
+  if (xTaskCreatePinnedToCore(readRHTask, "RH Task", 2048, NULL, 1, NULL, 1) != pdPASS) {
+    Serial.println("Failed to create RH Task!");
+  }
 }
 
 void loop() {
-  // put your main code here, to run repeatedly:
+
+  if (mode == "Automatic") {
+    autoPompaPH();
+    autoNutrisi();
+    autoSpary();
+  }
 }
 
 // // put function definitions here:
