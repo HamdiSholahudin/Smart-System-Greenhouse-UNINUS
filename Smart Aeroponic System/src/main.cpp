@@ -5,7 +5,7 @@
 #include <DHT.h>
 #include <WiFi.h>
 #include <WiFiClient.h>
-#include <PubSubClient.h>
+#include <MQTT.h>
 #include <Arduino.h>
 #include <ArduinoJson.h>
 #include "ShiftRegister74HC595_NonTemplate.h"
@@ -27,7 +27,7 @@ const char * mqttSensorTopic = "SmartAerophonik/SensorData";
 const char * mqttControlTopic = "SmartAerophonik/Control_Send";
 
 WiFiClient wifiClient;
-PubSubClient mqttClient(wifiClient);
+MQTTClient mqttClient;
 
 // === Definisi Tombol dan Relay ===
 #define BUTTON_S1 4 // Tombol PH UP
@@ -122,31 +122,35 @@ void dhtTask(void * pvParameters) {
 
 void setupWiFi() {
   Serial.print("Connecting to WiFi");
-  WiFi.begin(ssid, password);
-  while (WiFi.status() != WL_CONNECTED) {
-    delay(500);
-    Serial.print(".");
-  }
-  Serial.println("\nWiFi connected");
-  Serial.print("IP address: ");
-  Serial.println(WiFi.localIP());
+    WiFi.begin(ssid, password);
+    unsigned long startTime = millis();
+    while (WiFi.status() != WL_CONNECTED) {
+        delay(500);
+        Serial.print(".");
+        if (millis() - startTime >= 10000) {  // 10 detik limit
+            Serial.println("WiFi connection timeout");
+            return;  // Keluar jika WiFi tidak terhubung dalam 10 detik
+        }
+    }
+    Serial.println("\nWiFi connected");
+    Serial.print("IP address: ");
+    Serial.println(WiFi.localIP());
 }
 
-void mqttCallback(char * topic, byte * payload, unsigned int length) {
-  String message = "";
-  for (unsigned int i = 0; i < length; i++) {
-    message += (char) payload[i];
-  }
+void mqttCallback(String &topic, String &payload) {
+  // String message = "";
+  // for (unsigned int i = 0; i < length; i++) {
+  //   message += (char) payload[i];
+  // }
 
   // Debug: Menampilkan topik dan pesan yang diterima
-  Serial.print("Received message on topic: ");
-  Serial.println(topic);
-  Serial.print("Message: ");
-  Serial.println(message);
+  Serial.println("incoming: " + topic + " - " + payload);
+  // Debugging
+  Serial.println("debug 0");
 
   // Parsing JSON
   StaticJsonDocument < 512 > doc;
-  DeserializationError error = deserializeJson(doc, message);
+  DeserializationError error = deserializeJson(doc, payload);
   if (error) {
     Serial.print("Failed to parse JSON: ");
     Serial.println(error.f_str());
@@ -204,8 +208,8 @@ void connectMQTT() {
     setupWiFi();
   }
 
-  mqttClient.setServer(mqtt_server, mqtt_port);
-  mqttClient.setCallback(mqttCallback); // Set callback function for incoming messages
+  mqttClient.begin(mqtt_server, mqtt_port, wifiClient);
+  mqttClient.onMessage(mqttCallback); // Set callback function for incoming messages
 
   while (!mqttClient.connected()) {
     Serial.print("Connecting to MQTT...");
@@ -215,7 +219,7 @@ void connectMQTT() {
       mqttClient.subscribe("SmartAerophonik/Control"); // Subscribe to topic
     } else {
       Serial.print("Failed, error code: ");
-      Serial.println(mqttClient.state());
+      Serial.println(mqttClient.lastError());
       Serial.println("Retrying in 5 seconds...");
       delay(5000);
     }
@@ -241,42 +245,6 @@ void sendPumpStatus(const char * pumpName, bool state,const char * type) {
     Serial.printf("Status %s terkirim: %s\n", pumpName, state ? "ON" : "OFF");
   } else {
     Serial.printf("Gagal mengirim status %s!\n", pumpName);
-  }
-}
-
-
-// void sht20Task(void * pvParameters) {
-//   for (;;) {
-//     float temp = sht20.readTemperature();
-//     float hum = sht20.readHumidity();
-
-//     if (xSemaphoreTake(xMutex, portMAX_DELAY) == pdTRUE) {
-//       temperatureSHT20 = temp;
-//       humiditySHT20 = hum;
-//       xSemaphoreGive(xMutex);
-//     }
-
-//     vTaskDelay(pdMS_TO_TICKS(2000));
-//   }
-// }
-
-void readRHTask(void *parameter) {
-  sensors_event_t tempEvent, humidityEvent;
-  for (;;) {
-    // Membaca data suhu dan kelembapan
-    aht.getEvent(&humidityEvent, &tempEvent);
-
-    //Menampilkan data kelembapan
-    Serial.print("RH: ");
-    Serial.print(humidityEvent.relative_humidity);
-    Serial.println(" %");
-
-    if (xSemaphoreTake(xMutex, portMAX_DELAY) == pdTRUE) {
-      RHLevel = humidityEvent.relative_humidity;
-      xSemaphoreGive(xMutex);
-    }
-    // Tunggu selama 1 detik
-    vTaskDelay(2000 / portTICK_PERIOD_MS);
   }
 }
 
@@ -400,6 +368,35 @@ void autoNutrisi() {
   }
 }
 
+// Fungsi untuk memainkan melodi
+void playMelody() {
+  // Nada melodi lucu
+  playTone(262, 400); // C4
+  playTone(262, 400); // C4
+  playTone(392, 400); // G4
+  playTone(392, 400); // G4
+  playTone(440, 400); // A4
+  playTone(440, 400); // A4
+  playTone(392, 800); // G4
+
+  delay(200);
+
+  playTone(349, 400); // F4
+  playTone(349, 400); // F4
+  playTone(330, 400); // E4
+  playTone(330, 400); // E4
+  playTone(294, 400); // D4
+  playTone(294, 400); // D4
+  playTone(262, 800); // C4
+}
+
+// Fungsi helper untuk memainkan nada dengan durasi
+void playTone(int frequency, int duration) {
+  tone(BUZZER_PIN, frequency, duration);
+  delay(duration); // Tunggu hingga nada selesai
+  noTone(BUZZER_PIN); // Matikan nada
+}
+
 // Ultrasonic Task
 void waterlevelTask(void *pvParameters) {
     int distance;
@@ -425,6 +422,7 @@ void waterlevelTask(void *pvParameters) {
                         if (!buzzerState) { // Hanya cetak jika status berubah
                             Serial.println("BUZZER ON: Ketinggian kritis terdeteksi!");
                             buzzerState = true;
+                            playMelody(); // Memainkan melodi
                         }
                         digitalWrite(BUZZER_PIN, HIGH); // Buzzer menyala
                     } else {
@@ -493,6 +491,49 @@ void tdsTask(void * pvParameters) {
   }
 }
 
+// void sht20Task(void * pvParameters) {
+//   for (;;) {
+//     float temp = sht20.readTemperature();
+//     float hum = sht20.readHumidity();
+
+//     if (xSemaphoreTake(xMutex, portMAX_DELAY) == pdTRUE) {
+//       temperatureSHT20 = temp;
+//       humiditySHT20 = hum;
+//       xSemaphoreGive(xMutex);
+//     }
+
+//     vTaskDelay(pdMS_TO_TICKS(2000));
+//   }
+// }
+
+void readRHTask(void *parameter) {
+  sensors_event_t tempEvent, humidityEvent;
+
+  for (;;) {
+    // Membaca data suhu dan kelembapan dari sensor AHT
+    aht.getEvent(&humidityEvent, &tempEvent);
+
+    // Periksa apakah pembacaan valid
+    if (!isnan(humidityEvent.relative_humidity)) {
+      // Serial.print("RH: ");
+      // Serial.print(humidityEvent.relative_humidity);
+      // Serial.println(" %");
+
+      // Mengupdate nilai RHLevel secara thread-safe
+      if (xSemaphoreTake(xMutex, portMAX_DELAY) == pdTRUE) {
+        RHLevel = humidityEvent.relative_humidity;
+        xSemaphoreGive(xMutex);
+      }
+    } else {
+      Serial.println("Error reading humidity data!");
+    }
+
+    // Tunggu selama 2 detik sebelum pembacaan berikutnya
+    vTaskDelay(pdMS_TO_TICKS(2000));
+  }
+}
+
+
 // LCD Display Task
 void lcdTask(void * pvParameters) {
   for (;;) {
@@ -507,8 +548,7 @@ void lcdTask(void * pvParameters) {
       lcd.print("PT:");
       lcd.print(temperatureDHT, 1);
       lcd.print("C");
-      // lcd.print(humidityDHT, 1);
-      // lcd.print("%");
+
       lcd.setCursor(0, 1);
       lcd.print("RH:");
       lcd.print(RHLevel, 1);
@@ -524,32 +564,39 @@ void lcdTask(void * pvParameters) {
       lcd.print(tdsValue, 1);
       lcd.print("ppm");
 
-      if(mode == "Manual"){
-
-      lcd.setCursor(12,2);
-      lcd.print("S1:");
-      lcd.print(pumpPhUpState ? "1" : "0");
-      lcd.setCursor(16,2);
-      lcd.print("S2:");
-      lcd.print(pumpPhDownState ? "1" : "0");
-
-      lcd.setCursor(12,3);
-      lcd.print("S3:");
-      lcd.print(pumpZatAState ? "1" : "0");
-      lcd.setCursor(16,3);
-      lcd.print("S4:");
-      lcd.print(pumpSprayingState ? "1" : "0");
-      }else{
-        lcd.setCursor(12,2);
-        lcd.print("Mode:");
-        lcd.setCursor(12,3);
-        lcd.print("Auto");
-      }
-
       lcd.setCursor(0, 3);
       lcd.print("pH:");
       lcd.print(phSensorValue, 2);
-      
+
+      if (WiFi.status() != WL_CONNECTED) {
+      // Ketika tidak terhubung ke WiFi
+        lcd.setCursor(12, 2);
+        lcd.print("Status:");
+        lcd.setCursor(12, 3);
+        lcd.print("Offline  "); // Pastikan membersihkan area dengan spasi
+      } else if (mode == "Manual") {
+      // Ketika mode Manual dan terhubung ke WiFi
+        lcd.setCursor(12, 2);
+        lcd.print("S1:");
+        lcd.print(pumpPhUpState ? "1" : "0");
+        lcd.setCursor(16, 2);
+        lcd.print("S2:");
+        lcd.print(pumpPhDownState ? "1" : "0");
+
+        lcd.setCursor(12, 3);
+        lcd.print("S3:");
+        lcd.print(pumpZatAState ? "1" : "0");
+        lcd.setCursor(16, 3);
+        lcd.print("S4:");
+        lcd.print(pumpSprayingState ? "1" : "0");
+      } else {
+      // Ketika mode Auto dan terhubung ke WiFi
+        lcd.setCursor(12, 2);
+        lcd.print("Mode:");
+        lcd.setCursor(12, 3);
+        lcd.print("Auto    "); // Pastikan membersihkan area dengan spasi
+      }
+
       xSemaphoreGive(xMutex);
     }
     vTaskDelay(pdMS_TO_TICKS(1000)); // Interval pembaruan LCD 1 detik
@@ -590,12 +637,11 @@ void sendSensorData() {
 void setup() {
   Serial.begin(115200);
   Serial.println("Initializing...");
-  setupWiFi();
 
-  mqttClient.setServer(mqtt_server, mqtt_port);
-  mqttClient.setCallback(mqttCallback);
-  connectMQTT();
+  mqttClient.begin(mqtt_server, mqtt_port, wifiClient);
+  mqttClient.onMessage(mqttCallback);
   mqttClient.publish("SmartAeroponik/RequestSetting", "Request");
+  
   ds18b20.begin();
   dht.begin();
   
@@ -611,6 +657,7 @@ void setup() {
 
   lcd.init(16, 17);
   lcd.backlight();
+  
   pinMode(TdsSensorPin, INPUT);
   pinMode(HT74HC595_OUT_EN, OUTPUT);
   pinMode(BUTTON_S1, INPUT_PULLUP);
@@ -652,12 +699,21 @@ void setup() {
   if (xTaskCreatePinnedToCore(lcdTask, "LCD Task", 2048, NULL, 1, NULL, 1) != pdPASS) {
     Serial.println("Failed to create LCD Task!");
   }
-  if (xTaskCreatePinnedToCore(readRHTask, "RH Task", 2048, NULL, 1, NULL, 1) != pdPASS) {
+  if (xTaskCreatePinnedToCore(readRHTask, "RH Task", 2048, NULL, 1, NULL, 0) != pdPASS) {
     Serial.println("Failed to create RH Task!");
   }
 }
 
 void loop() {
+
+  // Ensure WiFi and MQTT connection
+    if (WiFi.status() != WL_CONNECTED) {
+        setupWiFi();  // Coba koneksi WiFi lagi jika terputus
+    }
+
+    if (!mqttClient.connected()) {
+        connectMQTT();  // Coba koneksi MQTT lagi jika terputus
+    }
 
   if (mode == "Automatic") {
     autoPompaPH();
