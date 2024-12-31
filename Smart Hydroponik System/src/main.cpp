@@ -59,7 +59,7 @@ HardwareSerial Ultrasonic_Sensor(2);
 #define phSensorPin 13
 
 #define BUZZER_PIN 2 // Pin buzzer, atur sesuai kebutuhan Anda
-#define TANK_HEIGHT_CM 100 // Ketinggian tangki air dalam cm
+#define TANK_HEIGHT_CM 36 // Ketinggian tangki air dalam cm
 
 unsigned char data[4] = {};
 unsigned long lastPrintTime = 0; // Waktu terakhir menampilkan data
@@ -95,7 +95,7 @@ SemaphoreHandle_t xMutex;
 std::shared_ptr < ShiftRegister74HC595_NonTemplate > HT74HC595 =
   std::make_shared < ShiftRegister74HC595_NonTemplate > (6, HT74HC595_DATA, HT74HC595_CLOCK, HT74HC595_LATCH);
 
- void pulseCounter(){
+void pulseCounter(){
   // Increment the pulse counter
     pulseCount++;
   }
@@ -607,11 +607,11 @@ void setup() {
   
   pinMode(TdsSensorPin, INPUT);
   pinMode(HT74HC595_OUT_EN, OUTPUT);
-  pinMode(BUTTON_S1, INPUT);
-  pinMode(BUTTON_S2, INPUT);
-  pinMode(BUTTON_S3, INPUT);
+  pinMode(BUTTON_S1, INPUT_PULLUP);
+  pinMode(BUTTON_S2, INPUT_PULLUP);
+  pinMode(BUTTON_S3, INPUT_PULLUP);
   // pinMode(BUTTON_S4, INPUT);
-  pinMode(flowratepin, INPUT);
+  pinMode(flowratepin, INPUT_PULLUP);
   pinMode(BUZZER_PIN, OUTPUT); // Set pin buzzer sebagai output
   digitalWrite(BUZZER_PIN, LOW); // Pastikan buzzer mati saat awal
 

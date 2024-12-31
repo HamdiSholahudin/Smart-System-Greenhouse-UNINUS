@@ -141,7 +141,7 @@ void setupWiFi() {
 void mqttCallback(String &topic, String &payload) {
   // payload[length] = '\0'; // Null-terminate the payload string
   // String message = String((char * ) payload);
-    Serial.println("incoming: " + topic + " - " + payload);
+  Serial.println("incoming: " + topic + " - " + payload);
   // Debugging
   Serial.println("debug 0");
 
@@ -592,7 +592,7 @@ void setup() {
 
 void loop() {
     // Ensure WiFi and MQTT connection
-     if (WiFi.status() != WL_CONNECTED) {
+    if (WiFi.status() != WL_CONNECTED) {
         setupWiFi();  // Coba koneksi WiFi lagi jika terputus
     }
 
