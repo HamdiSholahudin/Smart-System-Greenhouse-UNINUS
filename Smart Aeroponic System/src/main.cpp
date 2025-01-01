@@ -52,8 +52,8 @@ MQTTClient mqttClient;
 #define TdsSensorPin 11              // GPIO pin for the TDS sensor
 #define phSensorPin 13               // GPIO pin for the pH sensor
 #define BUZZER_PIN 2                 // GPIO pin for the buzzer
-#define RXD 44                       // RX pin for the ultrasonic sensor
-#define TXD 43                       // TX pin for the ultrasonic sensor
+// #define RXD 44                       // RX pin for the ultrasonic sensor
+// #define TXD 43                       // TX pin for the ultrasonic sensor
 
 // === Pump and Button States ===
 // Variables to track the state of pumps and the last state of buttons.
@@ -63,20 +63,24 @@ bool lastButtonS1State = HIGH, lastButtonS2State = HIGH, lastButtonS3State = HIG
 // === Sensor and Device Initialization ===
 // Initialization of sensors and devices.
 DHT dht(DHTPIN, DHTTYPE);            // DHT sensor instance
-OneWire oneWire(DS18B20PIN);           // OneWire instance for DS18B20 sensor
+OneWire oneWire(DS18B20PIN);          // OneWire instance for DS18B20 sensor
 DallasTemperature ds18b20(&oneWire);  // DS18B20 temperature sensor instance
 Adafruit_AHTX0 aht;                   // AHTX0 temperature and humidity sensor instance
 LiquidCrystal_I2C lcd(0x27, 20, 4);   // LCD with I2C address 0x27, 20x4 display
 Adafruit_VL6180X vl6180x = Adafruit_VL6180X();  // VL6180X distance sensor instance
 #define TANK_HEIGHT_CM 38             // Water tank height in centimeters
 #define MAX_RANGE 500                 // maximum range of the VL6180X sensor in mm
-HardwareSerial Ultrasonic_Sensor(2);  // Serial instance for ultrasonic sensor (UART2)
+// HardwareSerial Ultrasonic_Sensor(2);  // Serial instance for ultrasonic sensor (UART2)
 
 // === Data Buffers and Timing ===
 // Variables for sensor data processing and timing.
 unsigned char data[4] = {};           // Buffer for ultrasonic sensor data
 unsigned long lastPrintTime = 0;      // Last time data was displayed
 bool buzzerState = false;             // Current state of the buzzer
+
+// Variable for automatic restart interval after 12 hours (43200000 ms)
+unsigned long previousRestartMillis = 0;
+const long restartInterval = 43200000;  // 12 hours in milliseconds (12 * 60 * 60 * 1000)
 
 // === Global Variables ===
 // Variables to store sensor readings and control parameters.
@@ -716,7 +720,7 @@ void setup() {
     }
   }
 
-  Ultrasonic_Sensor.begin(9600, SERIAL_8N1, RX, TX);
+  //Ultrasonic_Sensor.begin(9600, SERIAL_8N1, RX, TX);
   
   lcd.init(16, 17);
   lcd.backlight();
@@ -787,8 +791,12 @@ void loop() {
     auto_Nutrient_pump();
     autoSpray_pump();
   }
-<<<<<<< HEAD
+
+  unsigned long currentMillis = millis();
+    // logical reset every 12 hours
+    if (currentMillis - previousRestartMillis >= restartInterval) {
+      previousRestartMillis = currentMillis;
+      Serial.println("12 jam telah berlalu, merestart ESP32...");
+      ESP.restart();  // Restart ESP32
+    }
 }
-=======
-}
->>>>>>> ee8996fbda2fc01b7d524dfe336ab418b867ba4b
