@@ -656,14 +656,15 @@ void setup() {
   lcd.init(16,17);
   lcd.backlight();
   
-  pinMode(TdsSensorPin, INPUT);
-  pinMode(BUZZER_PIN, OUTPUT); // Set pin buzzer sebagai output
-  digitalWrite(BUZZER_PIN, LOW); // Pastikan buzzer mati saat awal
-  pinMode(HT74HC595_OUT_EN, OUTPUT);
   pinMode(BUTTON_S1, INPUT_PULLUP);
   pinMode(BUTTON_S2, INPUT_PULLUP);
   pinMode(BUTTON_S3, INPUT_PULLUP);
   // pinMode(BUTTON_S4, INPUT);
+
+  pinMode(HT74HC595_OUT_EN, OUTPUT);
+  pinMode(TdsSensorPin, INPUT);
+  pinMode(BUZZER_PIN, OUTPUT); 
+  digitalWrite(BUZZER_PIN, LOW); 
 
   //pinMode(flowratepin, INPUT_PULLUP);
   //attachInterrupt(digitalPinToInterrupt(flowratepin), pulseCounter, RISING); // Interrupt pada sinyal RISING
@@ -728,17 +729,16 @@ void setup() {
   HT74HC595 -> set(5, LOW, true);
 }
 void loop() { 
+  // Ensure WiFi and MQTT connection
+  if (WiFi.status() != WL_CONNECTED) {
+    setupWiFi();  // Try to connect to the wifi device again
+  }
 
- // Ensure WiFi and MQTT connection
-    if (WiFi.status() != WL_CONNECTED) {
-        setupWiFi();  // Coba koneksi WiFi lagi jika terputus
-    }
+  if (!mqttClient.connected()) {
+    connectMQTT();  // Try to connect to the MQTT broker again
+  }
 
-    if (!mqttClient.connected()) {
-        connectMQTT();  // Coba koneksi MQTT lagi jika terputus
-    }
-
-  sendSensorData();
+  sendSensorData(); // Send sensor data to MQTT broker
   
   if (mode == "Automatis") {
     auto_pH_pump();
