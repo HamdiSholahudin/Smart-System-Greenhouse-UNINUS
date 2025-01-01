@@ -787,4 +787,8 @@ void loop() {
     auto_Nutrient_pump();
     autoSpray_pump();
   }
+<<<<<<< HEAD
 }
+=======
+}
+>>>>>>> ee8996fbda2fc01b7d524dfe336ab418b867ba4b
