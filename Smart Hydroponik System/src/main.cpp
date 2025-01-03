@@ -14,7 +14,7 @@
 #include "ShiftRegister74HC595_NonTemplate.h"
 #include <HardwareSerial.h>
 #include <esp_now.h>
-#include "pin_config.h"
+//#include "pin_config.h"
 
 // === WiFi configuration ===
 const char * ssid = "SMART GREENHOUSE UNINUS (2Ghz)";
@@ -107,6 +107,11 @@ String mode = "Manual";               // System mode (Manual/Automatic)
 SemaphoreHandle_t xMutex;
 
 // === Shift Register Initialization ===
+// HT74HC595
+#define HT74HC595_CLOCK 5
+#define HT74HC595_LATCH 6
+#define HT74HC595_DATA 7
+#define HT74HC595_OUT_EN 4
 // Creates an instance of ShiftRegister74HC595_NonTemplate to control relays or LEDs.
 std::shared_ptr < ShiftRegister74HC595_NonTemplate > HT74HC595 =
   std::make_shared < ShiftRegister74HC595_NonTemplate > (6, HT74HC595_DATA, HT74HC595_CLOCK, HT74HC595_LATCH);
