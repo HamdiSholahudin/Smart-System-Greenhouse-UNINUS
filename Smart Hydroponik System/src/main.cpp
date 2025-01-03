@@ -107,7 +107,7 @@ String mode = "Manual";               // System mode (Manual/Automatic)
 SemaphoreHandle_t xMutex;
 
 // === Shift Register Initialization ===
-// HT74HC595
+// HT74HC595 PIN
 #define HT74HC595_CLOCK 5
 #define HT74HC595_LATCH 6
 #define HT74HC595_DATA 7
