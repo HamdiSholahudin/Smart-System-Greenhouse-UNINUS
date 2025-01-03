@@ -31,7 +31,7 @@ const char * mqttSensorTopic = "SmartAerophonik/SensorData";
 const char * mqttControlTopic = "SmartAerophonik/Control_Send";
 
 // === WiFi and MQTT client objects ===
-WiFiClient wifiClient;
+WiFiClient net;
 MQTTClient mqttClient;
 
 // === Button and Relay Definitions ===
@@ -67,10 +67,10 @@ OneWire oneWire(DS18B20PIN);          // OneWire instance for DS18B20 sensor
 DallasTemperature ds18b20(&oneWire);  // DS18B20 temperature sensor instance
 Adafruit_AHTX0 aht;                   // AHTX0 temperature and humidity sensor instance
 LiquidCrystal_I2C lcd(0x27, 20, 4);   // LCD with I2C address 0x27, 20x4 display
-Adafruit_VL6180X vl6180x = Adafruit_VL6180X();  // VL6180X distance sensor instance
+//Adafruit_VL6180X vl6180x = Adafruit_VL6180X();  // VL6180X distance sensor instance
 #define TANK_HEIGHT_CM 38             // Water tank height in centimeters
-#define MAX_RANGE 500                 // maximum range of the VL6180X sensor in mm
-// HardwareSerial Ultrasonic_Sensor(2);  // Serial instance for ultrasonic sensor (UART2)
+//#define MAX_RANGE 500                 // maximum range of the VL6180X sensor in mm
+ HardwareSerial Ultrasonic_Sensor(2);  // Serial instance for ultrasonic sensor (UART2)
 
 // === Data Buffers and Timing ===
 // Variables for sensor data processing and timing.
@@ -195,12 +195,12 @@ void connectMQTT() {
     setupWiFi(); //ensure WiFi connection
   }
 
-  mqttClient.begin(mqtt_server, mqtt_port, wifiClient);
+  mqttClient.begin(mqtt_server, mqtt_port, net);
   mqttClient.onMessage(mqttCallback); // Set callback function for incoming messages
 
   while (!mqttClient.connected()) {
     Serial.print("Connecting to MQTT...");
-    if (mqttClient.connect("SmartHydroponik_Uninus", mqtt_user, mqtt_password)) {
+    if (mqttClient.connect(clientID, mqtt_user, mqtt_password)) {
       Serial.println("Connected to MQTT Broker!");
       mqttClient.subscribe("SmartAerophonik/Settings");
       mqttClient.subscribe("SmartAerophonik/Control"); // Subscribe to control topic
@@ -360,156 +360,152 @@ void auto_Nutrient_pump() {
   }
 }
 
-// Fungtion to play melody
-void playMelody() {
-  playTone(262, 400); // C4
-  playTone(262, 400); // C4
-  playTone(392, 400); // G4
-  playTone(392, 400); // G4
-  playTone(440, 400); // A4
-  playTone(440, 400); // A4
-  playTone(392, 800); // G4
+// Melody data
+const int melody[] = {262, 262, 392, 392, 440, 440, 392, 349, 349, 330, 330, 294, 294, 262};
+const int durations[] = {400, 400, 400, 400, 400, 400, 800, 400, 400, 400, 400, 400, 400, 800};
 
-  if (!buzzerState) return;
-
-  playTone(349, 400); // F4
-  playTone(349, 400); // F4
-  playTone(330, 400); // E4
-  playTone(330, 400); // E4
-  playTone(294, 400); // D4
-  playTone(294, 400); // D4
-  playTone(262, 800); // C4
+// Helper function to play a tone
+void playTone(int frequency, int duration) {
+    unsigned long startTime = millis();
+    tone(BUZZER_PIN, frequency);
+    while (millis() - startTime < duration) {
+        if (!buzzerState) {
+            noTone(BUZZER_PIN); // Stop immediately
+            return;
+        }
+        vTaskDelay(10 / portTICK_PERIOD_MS); // Non-blocking delay
+    }
+    noTone(BUZZER_PIN);
 }
 
-// Helper function to play a tone with duration
-void playTone(int frequency, int duration) {
-  unsigned long startTime = millis();
-  tone(BUZZER_PIN, frequency);
-  while (millis() - startTime < duration) {
-    if (!buzzerState) {
-      noTone(BUZZER_PIN); // Matikan jika kondisi tidak kritis
-      return;
+// Function to play a melody
+void playMelody() {
+    for (int i = 0; i < sizeof(melody) / sizeof(melody[0]); i++) {
+        if (!buzzerState) return; // Stop if not critical
+        playTone(melody[i], durations[i]);
+        vTaskDelay(100 / portTICK_PERIOD_MS); // 100ms pause between tones
     }
-  }
-  noTone(BUZZER_PIN);
 }
 
 // Task: Read Water Level Sensor (Ultrasonic)
-// void waterlevelTask(void *pvParameters) {
-//   int distance;
-//   while (true) {
-//       if ( Ultrasonic_Sensor.available() >= 4) {
-//           if ( Ultrasonic_Sensor.read() == 0xFF) {
-//               data[0] = 0xFF;
-//               for (int i = 1; i < 4; i++) {
-//                   data[i] =  Ultrasonic_Sensor.read();
-//               }
+void waterlevelTask(void *pvParameters) {
+  int distance;
+  for (;;) {
+      if ( Ultrasonic_Sensor.available() >= 4) {
+          if ( Ultrasonic_Sensor.read() == 0xFF) {
+              data[0] = 0xFF;
+              for (int i = 1; i < 4; i++) {
+                  data[i] =  Ultrasonic_Sensor.read();
+              }
 
-//               // Checksum verification
-//               unsigned char CS = data[0] + data[1] + data[2];
-//                 if (data[3] == CS) {
-//                   distance = (data[1] << 8) + data[2];
-//                   unsigned long currentTime = millis(); // Current time
+              // Checksum verification
+              unsigned char CS = data[0] + data[1] + data[2];
+                if (data[3] == CS) {
+                  distance = (data[1] << 8) + data[2];
+                  unsigned long currentTime = millis(); // Current time
 
-//                   // calculate water level in cm
-//                   int waterLevel1 = TANK_HEIGHT_CM - (distance / 10); // convert mm to cm
+                  // calculate water level in cm
+                  int waterLevel1 = TANK_HEIGHT_CM - (distance / 10); // convert mm to cm
 
-//                   // Buzzer condition: water level <= 10 cm or distance <= 50 cm
-//                   if (waterLevel1 <= 10 || (distance / 10) <= 5) {
-//                       if (!buzzerState) { // Only print if status changes
-//                           Serial.println("BUZZER ON: Ketinggian kritis terdeteksi!");
-//                           buzzerState = true;
-//                           playMelody(); // Playing melody
-//                       }
-//                       digitalWrite(BUZZER_PIN, HIGH); // Buzzer on
-//                   } else {
-//                       if (buzzerState) { // Only print if status changes
-//                           Serial.println("BUZZER OFF: Ketinggian aman.");
-//                           buzzerState = false;
-//                       }
-//                       digitalWrite(BUZZER_PIN, LOW); // Buzzer off
-//                   }
+                  // Buzzer condition: water level <= 10 cm and distance <= 5 cm
+                  if (waterLevel1 <= 10 && (distance / 10) <= 5) {
+                      if (!buzzerState) { // Only print if status changes
+                          Serial.println("BUZZER ON: Ketinggian kritis terdeteksi!");
+                          buzzerState = true;
+                          playMelody(); // Playing melody
+                      }
+                      //digitalWrite(BUZZER_PIN, HIGH); // Buzzer on
+                  } else {
+                      if (buzzerState) { // Only print if status changes
+                          Serial.println("BUZZER OFF: Ketinggian aman.");
+                          buzzerState = false;
+                      }
+                      //digitalWrite(BUZZER_PIN, LOW); // Buzzer off
+                  }
 
-//                   // Display data on Serial Monitor every 1 second
-//                   if (currentTime - lastPrintTime >= 1000) { // Check if 1 second has passed
-//                       Serial.print("distance=");
-//                       Serial.print(distance / 10);
-//                       Serial.println(" cm");
+                  // Display data on Serial Monitor every 1 second
+                  if (currentTime - lastPrintTime >= 1000) { // Check if 1 second has passed
+                      if (distance > 30){
+                          Serial.print("distance=");
+                          Serial.print(distance / 10);
+                          Serial.println(" cm");
                       
-//                       Serial.print("Water Level=");
-//                       Serial.print(waterLevel1);
-//                       Serial.println(" cm");
-                      
-//                       lastPrintTime = currentTime; // Update last print time
-//                   }
-//               } else {
-//                   Serial.println("ERROR: Checksum mismatch");
-//               }
-//           }
-//       }
+                          Serial.print("Water Level=");
+                          Serial.print(waterLevel1);
+                          Serial.println(" cm");
+                      } else {
+                          Serial.println("ERROR: Distance out of range");
+                      }
+                      lastPrintTime = currentTime; // Update last print time
+                  }
+              } else {
+                  Serial.println("ERROR: Checksum mismatch");
+              }
+          }
+      }
 
-//       if (xSemaphoreTake(xMutex, portMAX_DELAY) == pdTRUE) {
-//           waterlevel = TANK_HEIGHT_CM - (distance / 10);;
-//           xSemaphoreGive(xMutex);
-//       }
-//     vTaskDelay(50 / portTICK_PERIOD_MS);
-//   }
-// }
-
-// Task: Read Water Level Sensor (VL6180X)
-void waterLevelTask(void *pvParameters) {
-  while (true) {
-    // Read distance from sensor
-    uint8_t range = vl6180x.readRange();
-    uint8_t status = vl6180x.readRangeStatus();
-
-    if (status == VL6180X_ERROR_NONE) {
-      int distanceCm = range / 10; // Convert to cm
-      int calculatedWaterLevel = TANK_HEIGHT_CM - distanceCm;
-
-      // Synchronize with mutex
       if (xSemaphoreTake(xMutex, portMAX_DELAY) == pdTRUE) {
-        waterLevel = calculatedWaterLevel; // Update water level
-        xSemaphoreGive(xMutex);
+          waterLevel = TANK_HEIGHT_CM - (distance / 10);;
+          xSemaphoreGive(xMutex);
       }
-
-      // Buzzer condition: water level <= 10 cm
-      if (waterLevel <= 10) {
-        if (!buzzerState) {
-          Serial.println("BUZZER ON: Critical water level detected!");
-          buzzerState = true;
-          playMelody();
-        }
-        digitalWrite(BUZZER_PIN, HIGH);
-      } else {
-        if (buzzerState) {
-          Serial.println("BUZZER OFF: Water level is safe.");
-          buzzerState = false;
-        }
-        digitalWrite(BUZZER_PIN, LOW);
-      }
-
-      // Display data on Serial Monitor every 1 second
-      unsigned long currentTime = millis();
-      if (currentTime - lastPrintTime >= 1000) {
-        Serial.print("Distance=");
-        Serial.print(distanceCm);
-        Serial.println(" cm");
-
-        Serial.print("Water Level=");
-        Serial.print(waterLevel);
-        Serial.println(" cm");
-
-        lastPrintTime = currentTime;
-      }
-    } else {
-      Serial.println("ERROR: Failed to read distance");
-    }
-
-    // Delay for stability
     vTaskDelay(50 / portTICK_PERIOD_MS);
   }
 }
+
+// // Task: Read Water Level Sensor (VL6180X)
+// void waterLevelTask(void *pvParameters) {
+//   while (true) {
+//     // Read distance from sensor
+//     uint8_t range = vl6180x.readRange();
+//     uint8_t status = vl6180x.readRangeStatus();
+
+//     if (status == VL6180X_ERROR_NONE) {
+//       int distanceCm = range / 10; // Convert to cm
+//       int calculatedWaterLevel = TANK_HEIGHT_CM - distanceCm;
+
+//       // Synchronize with mutex
+//       if (xSemaphoreTake(xMutex, portMAX_DELAY) == pdTRUE) {
+//         waterLevel = calculatedWaterLevel; // Update water level
+//         xSemaphoreGive(xMutex);
+//       }
+
+//       // Buzzer condition: water level <= 10 cm
+//       if (waterLevel <= 10) {
+//         if (!buzzerState) {
+//           Serial.println("BUZZER ON: Critical water level detected!");
+//           buzzerState = true;
+//           playMelody();
+//         }
+//         digitalWrite(BUZZER_PIN, HIGH);
+//       } else {
+//         if (buzzerState) {
+//           Serial.println("BUZZER OFF: Water level is safe.");
+//           buzzerState = false;
+//         }
+//         digitalWrite(BUZZER_PIN, LOW);
+//       }
+
+//       // Display data on Serial Monitor every 1 second
+//       unsigned long currentTime = millis();
+//       if (currentTime - lastPrintTime >= 1000) {
+//         Serial.print("Distance=");
+//         Serial.print(distanceCm);
+//         Serial.println(" cm");
+
+//         Serial.print("Water Level=");
+//         Serial.print(waterLevel);
+//         Serial.println(" cm");
+
+//         lastPrintTime = currentTime;
+//       }
+//     } else {
+//       Serial.println("ERROR: Failed to read distance");
+//     }
+
+//     // Delay for stability
+//     vTaskDelay(50 / portTICK_PERIOD_MS);
+//   }
+// }
 
 // === FreeRTOS Tasks ===
 // Tasks for reading sensor data periodically using FreeRTOS.
@@ -698,7 +694,8 @@ void setup() {
   Serial.begin(115200);
   Serial.println("Initializing...");
 
-  mqttClient.begin(mqtt_server, mqtt_port, wifiClient);
+  setupWiFi();
+  mqttClient.begin(mqtt_server, mqtt_port, net);
   mqttClient.onMessage(mqttCallback);
   mqttClient.publish("SmartAeroponik/RequestSetting", "Request");
   
@@ -713,14 +710,14 @@ void setup() {
     }
   }
 
-  if (!vl6180x.begin()) {
-    Serial.println("Sensor VL6180X tidak ditemukan. Periksa koneksi!");
-    while (true) {
-      delay(100); // Wait for sensor to be connected
-    }
-  }
+  // if (!vl6180x.begin()) {
+  //   Serial.println("Sensor VL6180X tidak ditemukan. Periksa koneksi!");
+  //   while (true) {
+  //     delay(100); // Wait for sensor to be connected
+  //   }
+  // }
 
-  //Ultrasonic_Sensor.begin(9600, SERIAL_8N1, RX, TX);
+  Ultrasonic_Sensor.begin(9600, SERIAL_8N1, RX, TX);
   
   lcd.init(16, 17);
   lcd.backlight();
@@ -751,7 +748,7 @@ void setup() {
   if (xTaskCreatePinnedToCore(controlPumpTask, "Pump Control Task", 2048, NULL, 5, NULL, 1) != pdPASS) {
     Serial.println("Failed to create Pump Control Task!");
   }
-  if (xTaskCreatePinnedToCore(waterLevelTask, "Water Level Task", 2048, NULL, 4, NULL, 1) != pdPASS) {
+  if (xTaskCreatePinnedToCore(waterlevelTask, "Water Level Task", 2048, NULL, 4, NULL, 1) != pdPASS) {
     Serial.println("Failed to create Water Level Task!");
   }
   if (xTaskCreatePinnedToCore(ds18b20Task, "DS18B20 Task", 2048, NULL, 3, NULL, 0) != pdPASS) {
@@ -783,6 +780,8 @@ void loop() {
   if (!mqttClient.connected()) {
     connectMQTT();  // Try to connect to the MQTT broker again
   }
+
+  mqttClient.loop(); // Keep the MQTT connection alive
 
   sendSensorData(); // Send sensor data to MQTT broker
 
