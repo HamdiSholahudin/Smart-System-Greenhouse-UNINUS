@@ -21,8 +21,6 @@ const char * clientID = "SmartHydroponik_Uninus";
 const char * mqttSensorTopic = "SmartHydroponik/SensorData";
 const char * mqttControlTopic = "SmartHydroponik/Control_Send";
 
-
-
 WiFiClient wifiClient;
 PubSubClient mqttClient(wifiClient);
 
@@ -50,8 +48,8 @@ DHT dht(DHTPIN, DHTTYPE);
 
 LiquidCrystal_I2C lcd(0x27, 20, 4);
 
-#define RXD 36
-#define TXD 37
+#define RXD 44
+#define TXD 43
 HardwareSerial Ultrasonic_Sensor(2);
 
 // Sensor TDS dan pH
@@ -529,9 +527,9 @@ void setup() {
   dht.begin();
   Ultrasonic_Sensor.begin(9600, SERIAL_8N1, RX, TX);
   Wire.begin(16, 17);
-  // lcd.init();
+  lcd.init(16,17);
   // lcd.begin();
-  lcd.begin(20, 4);
+  //lcd.begin(20, 4);
   lcd.backlight();
   pinMode(TdsSensorPin, INPUT);
   pinMode(HT74HC595_OUT_EN, OUTPUT);

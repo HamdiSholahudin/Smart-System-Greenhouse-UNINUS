@@ -13,8 +13,8 @@
 #include <ArduinoJson.h>
 #include "ShiftRegister74HC595_NonTemplate.h"
 #include <HardwareSerial.h>
-#include <esp_now.h>
-//#include "pin_config.h"
+//#include <esp_now.h>
+#include "pin_config.h"
 
 // === WiFi configuration ===
 const char * ssid = "SMART GREENHOUSE UNINUS (2Ghz)";
@@ -37,14 +37,14 @@ MQTTClient mqttClient;
 // === Button and Relay Definitions ===
 // - Buttons are used for manual control (PH UP, PH DOWN, Nutrient AB)
 // - Relays are used to control hardware (pumps or actuators)
-#define BUTTON_S1 4                  // GPIO pin for PH UP button
-#define BUTTON_S2 8                  // GPIO pin for PH DOWN button
+#define BUTTON_S1 8                  // GPIO pin for PH UP button
+#define BUTTON_S2 12                  // GPIO pin for PH DOWN button
 #define BUTTON_S3 14                 // GPIO pin for Nutrient AB button
-//#define BUTTON_S4 12               // GPIO pin for Spraying button
-#define RELAY_PH_UP 3                // GPIO pin for PH UP relay
+//#define BUTTON_S4 4               // GPIO pin for Spraying button
+#define RELAY_PH_UP 4                // GPIO pin for PH UP relay
 #define RELAY_PH_DOWN 2              // GPIO pin for PH DOWN relay
 #define RELAY_ZAT_A 1                // GPIO pin for Nutrient A relay
-#define RELAY_ZAT_B 0                // GPIO pin for Nutrient B relay
+#define RELAY_ZAT_B 0                // GPIO pin for Nutrient relay
 //#define RELAY_SPRAYING 4           // GPIO pin for Spraying relay
 #define DS18B20PIN 9                 // GPIO pin for DS18B20 temperature sensor
 #define DHTPIN 1                     // GPIO pin for the DHT sensor
@@ -67,7 +67,7 @@ DHT dht(DHTPIN, DHTTYPE);            // DHT sensor instance
 OneWire oneWire(DS18B20PIN);           // OneWire instance for DS18B20 sensor
 DallasTemperature ds18b20(&oneWire);  // DS18B20 temperature sensor instance
 LiquidCrystal_I2C lcd(0x27, 20, 4);   // LCD with I2C address 0x27, 20x4 display
-#define TANK_HEIGHT_CM 36             // Water tank height in centimeters
+#define TANK_HEIGHT_CM 39             // Water tank height in centimeters
 HardwareSerial Ultrasonic_Sensor(2);  // Serial instance for ultrasonic sensor (UART2)
 
 // === Data Buffers and Timing ===
@@ -89,18 +89,19 @@ const long restartInterval = 43200000;  // 12 jam dalam milidetik (12 * 60 * 60 
 float phSensorValue = 0.0, temperatureDS18B20 = 0.0;
 float temperatureDHT = 0.0, humidityDHT = 0.0, waterflowdata = 0.0;
 int waterlevel = 0, tdsValue = 0/*, flowRate = 0*/;
-int flowRateReceived= 0; // Variabel untuk menyimpan data yang diterima
+//float receivedFlowRateLPM = 0.0; // Variabel untuk menyimpan data yang diterima
 
 // Control limits for pH and nutrients
-float limitPhMin, limitPhMax;         // pH range limits
-int limitNutrisiMin, limitNutrisiMax; // Nutrient level range limits
-float start_spray, end_spray;         // Spray timing parameters
-float currentPhValue;                 // Current pH value
-int currentNutrisiValue;              // Current nutrient value
-int tangkiAir;                        // Water tank status
+float limitPhMin=0, limitPhMax=0;         // pH range limits
+int limitNutrisiMin=0, limitNutrisiMax=0; // Nutrient level range limits
+float start_spray=0, end_spray=0;         // Spray timing parameters
+float currentPhValue=0;                 // Current pH value
+int currentNutrisiValue=0;              // Current nutrient value
+//int tangkiAir;                        // Water tank status
 
 // Operating mode
 String mode = "Manual";               // System mode (Manual/Automatic)
+String device;
 
 // === FreeRTOS Mutex ===
 // Mutex for protecting shared resources in FreeRTOS tasks.
@@ -108,10 +109,10 @@ SemaphoreHandle_t xMutex;
 
 // === Shift Register Initialization ===
 // HT74HC595 PIN
-#define HT74HC595_CLOCK 5
-#define HT74HC595_LATCH 6
-#define HT74HC595_DATA 7
-#define HT74HC595_OUT_EN 4
+// #define HT74HC595_CLOCK 5
+// #define HT74HC595_LATCH 6
+// #define HT74HC595_DATA 7
+// #define HT74HC595_OUT_EN 4
 // Creates an instance of ShiftRegister74HC595_NonTemplate to control relays or LEDs.
 std::shared_ptr < ShiftRegister74HC595_NonTemplate > HT74HC595 =
   std::make_shared < ShiftRegister74HC595_NonTemplate > (6, HT74HC595_DATA, HT74HC595_CLOCK, HT74HC595_LATCH);
@@ -141,6 +142,18 @@ void mqttCallback(String &topic, String &payload) {
   Serial.println("incoming: " + topic + " - " + payload);
   // Debugging
   Serial.println("debug 0");
+  
+  // Menambahkan logika untuk mengonversi payload ke string
+  // String message = "";
+  // for (unsigned int i = 0; i < length; i++) {
+  //   message += (char)payload[i];
+  // }
+
+  // Debug: Menampilkan topik dan pesan yang diterima
+  // Serial.print("Received message on topic: ");
+  // Serial.println(topic);
+  // Serial.print("Message: ");
+  // Serial.println(message);
 
     // Parsing JSON
     StaticJsonDocument<512> doc;
@@ -150,13 +163,25 @@ void mqttCallback(String &topic, String &payload) {
         Serial.println(error.f_str());
         return;
     }
+
     // Update setting from "SmartHydroponik/Settings" topic
     if (String(topic) == "SmartHydroponik/Settings") {
+    Serial.println("Debug 2 Topic settings masuk");
     limitPhMin = doc["Limit_ph_min"];
     limitPhMax = doc["Limit_ph_max"];
     limitNutrisiMin = doc["Limit_nutrisi_min"];
     limitNutrisiMax = doc["Limit_nutrisi_max"];
-    tangkiAir = doc["tangki_air"];
+    //tangkiAir = doc["tangki_air"];
+    device = doc["device"].as < String > ();
+
+    Serial.print("Limit PH Min: ");
+    Serial.println(limitPhMin);
+    Serial.print("Limit PH Max: ");
+    Serial.println(limitPhMax);
+    Serial.print("Limit Nutrisi Min: ");
+    Serial.println(limitNutrisiMin);
+    Serial.print("Limit Nutrisi Max: ");
+    Serial.println(limitNutrisiMax);
   }
 
     if (String(topic) == "SmartHydroponik/Control") {
@@ -166,6 +191,7 @@ void mqttCallback(String &topic, String &payload) {
     String pompa = doc["pompa"];
     int status = doc["status"];
     String device = doc["device"];
+
       if (pompa == "Pompa_PHUP") {
         bool pumpPhUpState = (status == 1);
         HT74HC595->set(RELAY_PH_UP, pumpPhUpState ? HIGH : LOW, true);
@@ -218,6 +244,7 @@ void connectMQTT() {
   }
 }
 
+// === Send Pump Status Function ===
 void sendPumpStatus(const char * pumpName, bool state, const char * type) {
   if (!mqttClient.connected()) {
     Serial.println("MQTT disconnected. Skipping status update.");
@@ -348,89 +375,59 @@ void auto_Nutrient_pump() {
   }
 }
 
-// Melody data
-const int melody[] = {262, 262, 392, 392, 440, 440, 392, 349, 349, 330, 330, 294, 294, 262};
-const int durations[] = {400, 400, 400, 400, 400, 400, 800, 400, 400, 400, 400, 400, 400, 800};
-
-// Helper function to play a tone
-void playTone(int frequency, int duration) {
-    unsigned long startTime = millis();
-    tone(BUZZER_PIN, frequency);
-    while (millis() - startTime < duration) {
-        if (!buzzerState) {
-            noTone(BUZZER_PIN); // Stop immediately
-            return;
-        }
-        vTaskDelay(10 / portTICK_PERIOD_MS); // Non-blocking delay
-    }
-    noTone(BUZZER_PIN);
-}
-
-// Function to play a melody
-void playMelody() {
-    for (int i = 0; i < sizeof(melody) / sizeof(melody[0]); i++) {
-        if (!buzzerState) return; // Stop if not critical
-        playTone(melody[i], durations[i]);
-        vTaskDelay(100 / portTICK_PERIOD_MS); // 100ms pause between tones
-    }
-}
-
 // Task: Read Water Level Sensor (Ultrasonic)
 void waterlevelTask(void *pvParameters) {
   int distance;
   for (;;) {
-      if ( Ultrasonic_Sensor.available() >= 4) {
-          if ( Ultrasonic_Sensor.read() == 0xFF) {
-              data[0] = 0xFF;
-              for (int i = 1; i < 4; i++) {
-                  data[i] =  Ultrasonic_Sensor.read();
-              }
+      if (Ultrasonic_Sensor.available() >= 4) {
+            if (Ultrasonic_Sensor.read() == 0xFF) {
+                data[0] = 0xFF;
+                for (int i = 1; i < 4; i++) {
+                    data[i] = Ultrasonic_Sensor.read();
+                }
 
-              // Checksum verification
-              unsigned char CS = data[0] + data[1] + data[2];
+                // Verifikasi checksum
+                unsigned char CS = data[0] + data[1] + data[2];
                 if (data[3] == CS) {
-                  distance = (data[1] << 8) + data[2];
-                  unsigned long currentTime = millis(); // Current time
+                    distance = (data[1] << 8) + data[2];
+                    unsigned long currentTime = millis(); // Waktu saat ini
 
-                  // calculate water level in cm
-                  int waterLevel1 = TANK_HEIGHT_CM - (distance / 10); // convert mm to cm
+                    // Hitung ketinggian air dalam tangki
+                    int waterLevel = TANK_HEIGHT_CM - (distance / 10); // Konversi mm ke cm
 
-                  // Buzzer condition: water level <= 10 cm and distance <= 5 cm
-                  if (waterLevel1 <= 10 && (distance / 10) <= 5) {
-                      if (!buzzerState) { // Only print if status changes
-                          Serial.println("BUZZER ON: Ketinggian kritis terdeteksi!");
-                          buzzerState = true;
-                          playMelody(); // Playing melody
-                      }
-                      //digitalWrite(BUZZER_PIN, HIGH); // Buzzer on
-                  } else {
-                      if (buzzerState) { // Only print if status changes
-                          Serial.println("BUZZER OFF: Ketinggian aman.");
-                          buzzerState = false;
-                      }
-                      //digitalWrite(BUZZER_PIN, LOW); // Buzzer off
-                  }
+                    // Kondisi untuk buzzer
+                    if (waterLevel <= 10 || (distance / 10) <= 10) {
+                        if (!buzzerState) { // Hanya cetak jika status berubah
+                            Serial.println("BUZZER ON: Ketinggian kritis terdeteksi!");
+                            buzzerState = true;
+                        }
+                        digitalWrite(BUZZER_PIN, HIGH); // Buzzer menyala
+                    } else {
+                        if (buzzerState) { // Hanya cetak jika status berubah
+                            Serial.println("BUZZER OFF: Ketinggian aman.");
+                            buzzerState = false;
+                        }
+                        digitalWrite(BUZZER_PIN, LOW); // Buzzer mati
+                    }
 
-                  // Display data on Serial Monitor every 1 second
-                  if (currentTime - lastPrintTime >= 1000) { // Check if 1 second has passed
-                      if (distance > 30){
-                          Serial.print("distance=");
-                          Serial.print(distance / 10);
-                          Serial.println(" cm");
-                      
-                          Serial.print("Water Level=");
-                          Serial.print(waterLevel1);
-                          Serial.println(" cm");
-                      } else {
-                          Serial.println("ERROR: Distance out of range");
-                      }
-                      lastPrintTime = currentTime; // Update last print time
-                  }
-              } else {
-                  Serial.println("ERROR: Checksum mismatch");
-              }
-          }
-      }
+                    // Tampilkan data di Serial Monitor setiap 1 detik
+                    if (currentTime - lastPrintTime >= 1000) { // Cek jika 1 detik telah berlalu
+                        Serial.print("distance=");
+                        Serial.print(distance / 10);
+                        Serial.println(" cm");
+                        
+                        Serial.print("Water Level=");
+                        Serial.print(waterLevel);
+                        Serial.println(" cm");
+                        
+                        lastPrintTime = currentTime; // Update waktu terakhir mencetak
+                    }
+                } else {
+                    Serial.println("ERROR: Checksum mismatch");
+                }
+            }
+        }
+
 
       if (xSemaphoreTake(xMutex, portMAX_DELAY) == pdTRUE) {
           waterlevel = TANK_HEIGHT_CM - (distance / 10);;
@@ -552,12 +549,12 @@ void lcdTask(void * pvParameters) {
       lcd.print(temperatureDHT, 1);
       lcd.print("C");
 
-      lcd.setCursor(0, 1);
-      lcd.print("WF:");
-      lcd.print(flowRateReceived / 100.0, 1);
-      lcd.print("L/m");
+      // lcd.setCursor(0, 1);
+      // lcd.print("WF:");
+      // lcd.print(receivedFlowRateLPM, 1);
+      // lcd.print("L/m");
 
-      lcd.setCursor(12, 1);
+      lcd.setCursor(0, 1);
       lcd.print("WL:");
       lcd.print(waterlevel, 1);
       lcd.print("cm");
@@ -573,31 +570,35 @@ void lcdTask(void * pvParameters) {
 
       if (WiFi.status() != WL_CONNECTED) {
       // Ketika tidak terhubung ke WiFi
-        lcd.setCursor(12, 2);
+        lcd.setCursor(12, 1);
         lcd.print("Status:");
+        lcd.setCursor(12, 2);
+        lcd.print("Offline  ");
         lcd.setCursor(12, 3);
-        lcd.print("Offline  "); // Pastikan membersihkan area dengan spasi
+        lcd.print("       "); // Pastikan membersihkan area dengan spasi
       } else if (mode == "Manual") {
       // Ketika mode Manual dan terhubung ke WiFi
-        lcd.setCursor(12, 2);
+        lcd.setCursor(12, 1);
         lcd.print("S1:");
         lcd.print(pumpPhUpState ? "1" : "0");
-        lcd.setCursor(16, 2);
+        lcd.setCursor(12, 2);
         lcd.print("S2:");
         lcd.print(pumpPhDownState ? "1" : "0");
 
         lcd.setCursor(12, 3);
         lcd.print("S3:");
         lcd.print(pumpZatAState ? "1" : "0");
-        lcd.setCursor(16, 3);
-        lcd.print("S4:");
-        lcd.print(pumpSprayingState ? "1" : "0");
+        //lcd.setCursor(16, 3);
+        // lcd.print("S4:");
+        // lcd.print(pumpSprayingState ? "1" : "0");
       } else {
       // Ketika mode Auto dan terhubung ke WiFi
-        lcd.setCursor(12, 2);
+        lcd.setCursor(12, 1);
         lcd.print("Mode:");
-        lcd.setCursor(12, 3);
+        lcd.setCursor(12, 2);
         lcd.print("Auto    "); // Pastikan membersihkan area dengan spasi
+        lcd.setCursor(12, 3);
+        lcd.print("            ");
       }
 
       xSemaphoreGive(xMutex);
@@ -619,7 +620,7 @@ void sendSensorData() {
         jsonDoc["ph_air"] = phSensorValue;
         jsonDoc["tds"] = tdsValue;
         jsonDoc["suhu_air"] = temperatureDS18B20;
-        jsonDoc["laju_air"] = flowRateReceived / 100.0;
+        //jsonDoc["laju_air"] = receivedFlowRateLPM;
         jsonDoc["volume_air"] = waterlevel;
         jsonDoc["panel_temp"] = temperatureDHT;
         jsonDoc["device_id"] = 1;                 // ID perangkat (misalnya 1)
@@ -634,27 +635,20 @@ void sendSensorData() {
     } else {
         Serial.println("Gagal mengirim data sensor.");
     }
+    vTaskDelay(pdMS_TO_TICKS(3000));
 }
 
 // === Callback Data Receive to Espnow  ===
 // Callback ketika data diterima
-void OnDataReceived(const uint8_t* mac_addr, const uint8_t* data, int len) {
-  if (len == sizeof(flowRateReceived)) {
-    memcpy(&flowRateReceived, data, sizeof(flowRateReceived));
-    Serial.print("Data diterima: ");
-    Serial.println(flowRateReceived);
-    
-    // // Menampilkan data di LCD
-    // lcd.clear();
-    // lcd.setCursor(0, 0);
-    // lcd.print("Flow Rate:");
-    // lcd.setCursor(0, 1);
-    // lcd.print(flowRateReceived / 100.0);  // Menampilkan dalam format L/min
-    // lcd.print(" L/min");
-  } else {
-    Serial.println("Ukuran data tidak sesuai!");
-  }
-}
+// void OnDataRecv(const uint8_t *mac_addr, const uint8_t *data, int len) {
+//   // Menyimpan data yang diterima ke variabel
+//   memcpy(&receivedFlowRateLPM, data, sizeof(receivedFlowRateLPM));
+  
+//   // Menampilkan data yang diterima
+//   Serial.print("Data diterima: Flow Rate = ");
+//   Serial.print(receivedFlowRateLPM);
+//   Serial.println(" L/min");
+// }
 
 void setup() {
   Serial.begin(115200);
@@ -662,17 +656,18 @@ void setup() {
   
   setupWiFi();
 
-    // Wi-Fi initialization
-  WiFi.mode(WIFI_STA); // ESP32 mode station (client)
+  //   // Wi-Fi initialization
+  // WiFi.mode(WIFI_STA); // ESP32 mode station (client)
 
-  // Inisialisasi ESP-NOW
-  if (esp_now_init() != ESP_OK) {
-    Serial.println("ESP-NOW Init Error");
-    lcd.setCursor(0, 1);
-    lcd.print("ESP-NOW Error");
-    return;
-  }
-  esp_now_register_recv_cb(OnDataReceived); // Register callback to receive data
+  // // Inisialisasi ESP-NOW
+  // if (esp_now_init() != ESP_OK) {
+  //   Serial.println("ESP-NOW Init Error");
+  //   lcd.setCursor(0, 1);
+  //   lcd.print("ESP-NOW Error");
+  //   return;
+  // }
+  // //esp_now_set_self_role(ESP_NOW_ROLE_SLAVE);
+  // esp_now_register_recv_cb(OnDataRecv); // Register callback to receive data
   
   mqttClient.begin(mqtt_server, mqtt_port, net);
   mqttClient.onMessage(mqttCallback); 
@@ -771,8 +766,8 @@ void loop() {
     Serial.println(limitNutrisiMin);
     Serial.print("Limit Nutrisi Max: ");
     Serial.println(limitNutrisiMax);
-    Serial.print("Tangki Air: ");
-    Serial.println(tangkiAir);
+    //Serial.print("Tangki Air: ");
+    //Serial.println(tangkiAir);
     vTaskDelay(pdMS_TO_TICKS(2000));
 
   unsigned long currentMillis = millis();
