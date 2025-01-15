@@ -159,27 +159,15 @@ void mqttCallback(String &topic, String &payload) {
   }
 
   // Logika untuk topik "SmartAerophonik/Settings"
-  if (topic == "SmartAerophonik/Settings") {
+  if (String(topic) == "SmartAerophonik/Settings") {
     limitPhMin = doc["Limit_ph_min"];
     limitPhMax = doc["Limit_ph_max"];
     limitNutrisiMin = doc["Limit_nutrisi_min"];
     limitNutrisiMax = doc["Limit_nutrisi_max"];
     start_spray = doc["waktu_spary_start"];
     end_spray = doc["waktu_spary_end"];
-     device = doc["device"].as < String > ();
-
-    Serial.print("Limit PH Min: ");
-    Serial.println(limitPhMin);
-    Serial.print("Limit PH Max: ");
-    Serial.println(limitPhMax);
-    Serial.print("Limit Nutrisi Min: ");
-    Serial.println(limitNutrisiMin);
-    Serial.print("Limit Nutrisi Max: ");
-    Serial.println(limitNutrisiMax);
-    Serial.print("Waktu Spray Start: ");
-    Serial.println(start_spray);
-    Serial.print("Waktu Spray End: ");
-    Serial.println(end_spray);
+    String device = doc["device"];
+    Serial.print("Data Setting Diterima");
   }
 
   // Logika untuk topik "SmartAerophonik/Control"
@@ -192,26 +180,24 @@ void mqttCallback(String &topic, String &payload) {
     if (type == "control") {
       if (pompa == "Pompa_PHUP") {
         pumpPhUpState = (status == 1);
-        // HT74HC595->set(RELAY_PH_UP, pumpPhUpState ? HIGH : LOW, true);
+        HT74HC595->set(RELAY_PH_UP, pumpPhUpState ? HIGH : LOW, true);
       } else if (pompa == "Pompa_PHDOWN") {
         pumpPhDownState = (status == 1);
-        // HT74HC595->set(RELAY_PH_DOWN, pumpPhDownState ? HIGH : LOW, true);
+        HT74HC595->set(RELAY_PH_DOWN, pumpPhDownState ? HIGH : LOW, true);
       } else if (pompa == "Pompa_Nutrisi") {
         pumpZatAState = (status == 1);
         pumpZatBState = (status == 1);
-        // HT74HC595->set(RELAY_ZAT_A, pumpZatAState ? HIGH : LOW, true);
-        // HT74HC595->set(RELAY_ZAT_B, pumpZatBState ? HIGH : LOW, true);
+        HT74HC595->set(RELAY_ZAT_A, pumpZatAState ? HIGH : LOW, true);
+        HT74HC595->set(RELAY_ZAT_B, pumpZatBState ? HIGH : LOW, true);
       } else if (pompa == "Pompa_Spraying") {
         pumpSprayingState = (status == 1);
-        // HT74HC595->set(RELAY_SPRAYING, pumpSprayingState ? HIGH : LOW, true);
+        // HT74HC595->set(Relay_Spraying, pumpSprayingState ? HIGH : LOW, true);
+        controlRelay(Relay_Spraying, pumpSprayingState ? HIGH : LOW, true);
       }
     } else if (type == "mode") {
-      if (doc.containsKey("mode")) {
-        mode = doc["mode"].as<String>();
-        Serial.println("Mode set to: " + mode);
-      } else {
-        Serial.println("Mode key not found in JSON");
-      }
+      int dump =  doc["status"];
+      mode = dump ? "Automatis" : "Manual";
+      Serial.println("Mode set to: " + mode);
     }
   }
 }
@@ -326,14 +312,14 @@ void autoSpray_pump() {
     if (!pumpSprayingState) {
       pumpSprayingState = true;
       controlRelay(Relay_Spraying, HIGH, true);
-      //HT74HC595 -> set(RELAY_SPRAYING, HIGH, true);
+      // HT74HC595 -> set(RELAY_SPRAYING, HIGH, true);
       sendPumpStatus("Pompa_Spraying", pumpSprayingState, "status");
     }
   } else {
     if (pumpSprayingState) {
       pumpSprayingState = false;
       controlRelay(Relay_Spraying, LOW, true);
-      //HT74HC595 -> set(RELAY_SPRAYING, LOW, true);
+      // HT74HC595 -> set(RELAY_SPRAYING, LOW, true);
       sendPumpStatus("Pompa_Spraying", pumpSprayingState, "status");
     }
   }
@@ -341,7 +327,8 @@ void autoSpray_pump() {
 
 // === Auto Control pH Pump Function ===
 void auto_pH_pump() {
-  if (phSensorValue < limitPhMin) {
+if(phSensorValue  > limitPhMin+0.5 || phSensorValue < limitPhMax-0.5){
+if (phSensorValue < limitPhMin) {
     if (!pumpPhUpState) {
       pumpPhUpState = true;
       HT74HC595 -> set(RELAY_PH_UP, HIGH, true);
@@ -366,6 +353,17 @@ void auto_pH_pump() {
       Serial.println("Pompa PH dimatikan (pH dalam batas normal)");
     }
   }
+  }else{
+    if (pumpPhUpState || pumpPhDownState) {
+      pumpPhUpState = false;
+      pumpPhDownState = false;
+      HT74HC595 -> set(RELAY_PH_UP, LOW, true);
+      HT74HC595 -> set(RELAY_PH_DOWN, LOW, true);
+      sendPumpStatus("Pompa_PHUP", pumpPhUpState, "status");
+      sendPumpStatus("Pompa_PHDOWN", pumpPhDownState, "status");
+      Serial.println("Pompa PH dimatikan (pH dalam batas normal)");
+    }
+  }
 }
 
 // === Auto Control Nutrient Pump Function ===
@@ -379,7 +377,7 @@ void auto_Nutrient_pump() {
       sendPumpStatus("Pompa_Nutrisi", pumpZatBState, "status");
       Serial.println("Pompa Nutrisi dihidupkan (Nutrisi terlalu rendah)");
     }
-  } else if (tdsValue > limitNutrisiMax) {
+  } else if (tdsValue >= limitNutrisiMax-5) {
     if (pumpZatAState && pumpZatBState) {
       pumpZatAState = false;
       pumpZatBState = false;
@@ -668,7 +666,7 @@ void sendSensorData() {
   }
 
   // Create a JSON document to store sensor data
-  StaticJsonDocument < 256 > jsonDoc;
+  StaticJsonDocument < 512 > jsonDoc;
   jsonDoc["ph_air"] = phSensorValue;
   jsonDoc["tds"] = tdsValue;
   jsonDoc["suhu_air"] = temperatureDS18B20;
@@ -787,10 +785,14 @@ void loop() {
 
   sendSensorData(); // Send sensor data to MQTT broker
 
-  if (mode == "Automatic") {
+  if (mode == "Automatis") {
+    Serial.println("Mode Automatis Aktif");
+    autoSpray_pump();
     auto_pH_pump();
     auto_Nutrient_pump();
-    autoSpray_pump();
+    
+  }else{
+    Serial.println("Mode Manual Aktif");
   }
 
   unsigned long currentMillis = millis();
